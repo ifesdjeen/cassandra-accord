@@ -15,9 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package accord.utils;
 
 public interface TriConsumer<P1, P2, P3>
 {
-    void accept(P1 p1, P2 p2, P3 p3);
+    void consume(P1 p1, P2 p2, P3 p3);
 }

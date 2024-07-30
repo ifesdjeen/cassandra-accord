@@ -662,7 +662,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
             return;
         WithBoundsIterator<K, V> iter = withBoundsIterator(skipNullValues);
         while (iter.advance())
-            consumer.accept(iter.start(), iter.end(), iter.value());
+            consumer.consume(iter.start(), iter.end(), iter.value());
     }
 
     public WithBoundsIterator<K, V> withBoundsIterator()
