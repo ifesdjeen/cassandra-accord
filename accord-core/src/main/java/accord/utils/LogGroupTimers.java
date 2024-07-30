@@ -106,7 +106,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 
                 // when scheduling an imprecise run time, we don't mind if we're late by some amount
                 // (often we will be early)
-                runAt += schedulerImpreciseLateTolerance;
+                runAt = Math.max(now, runAt + schedulerImpreciseLateTolerance);
             }
             else
             {

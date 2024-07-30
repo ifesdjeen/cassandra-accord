@@ -53,6 +53,7 @@ import accord.utils.async.AsyncChains;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
 import static accord.local.Cleanup.ERASE;
+import static accord.local.Cleanup.TRUNCATE;
 import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
 import static accord.local.Command.Truncated.invalidated;
@@ -851,6 +852,16 @@ public class Commands
                               || (command.route() == null || Infer.safeToCleanup(safeStore, command, command.route(), command.executeAt()) || safeStore.isFullyPreBootstrapOrStale(command, command.route().participants()))
         , "Command %s could not be truncated", command);
 
+        Command result = purge(command, maybeFullRoute, cleanup);
+        safeCommand.update(safeStore, result);
+        safeStore.progressLog().clear(safeCommand.txnId());
+        if (notifyListeners)
+            safeStore.notifyListeners(safeCommand, result);
+        return result;
+    }
+
+    public static Command purge(Command command, @Nullable Unseekables<?> maybeFullRoute, Cleanup cleanup)
+    {
         Command result;
         switch (cleanup)
         {
@@ -868,8 +879,8 @@ public class Commands
 
             case TRUNCATE:
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
-                Invariants.checkState(command.hasBeen(PreApplied));
-                result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
+                if (!command.hasBeen(PreCommitted)) result = Command.Truncated.erasedOrInvalidOrVestigial(command);
+                else result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
                 break;
 
             case ERASE:
@@ -877,11 +888,6 @@ public class Commands
                 result = erased(command);
                 break;
         }
-
-        safeCommand.update(safeStore, result);
-        safeStore.progressLog().clear(safeCommand.txnId());
-        if (notifyListeners)
-            safeStore.notifyListeners(safeCommand, command);
         return result;
     }
 
