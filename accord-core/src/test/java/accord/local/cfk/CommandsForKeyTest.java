@@ -227,12 +227,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void notWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, Key key)
-        {
-            notWaiting(safeStore, safeCommand.txnId(), key);
-        }
-
-        @Override
         public void waitingOn(SafeCommandStore safeStore, TxnInfo txn, Key key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
         {
         }
@@ -837,12 +831,6 @@ public class CommandsForKeyTest
         {
             throw new UnsupportedOperationException();
         }
-
-        @Override
-        public void registerHistoricalTransactions(Deps deps)
-        {
-            throw new UnsupportedOperationException();
-        }
     }
 
     private static final class TestRead implements Read
@@ -959,6 +947,12 @@ public class CommandsForKeyTest
         public void shutdown()
         {
             Invariants.checkState(queue.isEmpty());
+        }
+
+        @Override
+        protected void registerHistoricalTransactions(Deps deps, SafeCommandStore safeStore)
+        {
+            throw new UnsupportedOperationException();
         }
 
         @Override

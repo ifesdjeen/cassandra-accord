@@ -575,13 +575,17 @@ public class BurnTest
     @Test
     public void testOne()
     {
-        run(System.nanoTime());
+        //run(System.nanoTime());
+        run(2403885097378041l);
+//        run(2400547520687125L);
+//        run(2390077950548125l);
+//        run(2396777357795125l);
     }
 
     private static void run(long seed)
     {
         Duration timeout = Duration.ofMinutes(3);
-        Runnable fn = () -> run(seed, 1000);
+        Runnable fn = () -> run(seed, 1_000);
         AsyncResult.Settable<?> promise = AsyncResults.settable();
         Thread t = new Thread(() -> {
             try

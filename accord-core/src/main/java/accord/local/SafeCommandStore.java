@@ -27,17 +27,22 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.ErasedSafeCommand;
+import accord.local.Status.Outcome;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
-import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Keys;
 import accord.primitives.Participants;
+import accord.primitives.RangeRoute;
 import accord.primitives.Ranges;
+import accord.primitives.Routable;
+import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
 import accord.primitives.Seekable;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
+import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -46,8 +51,10 @@ import accord.utils.Invariants;
 import static accord.local.Cleanup.NO;
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.RedundantBefore.PreBootstrapOrStale.FULLY;
+import static accord.local.SaveStatus.Applied;
 import static accord.local.SaveStatus.Erased;
 import static accord.local.SaveStatus.ErasedOrInvalidOrVestigial;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Route.isFullRoute;
 
 /**
@@ -152,10 +159,15 @@ public abstract class SafeCommandStore
         return maybeTruncate(safeCommand, safeCommand.current(), txnId, null);
     }
 
-    protected SafeCommand get(TxnId txnId)
+    public SafeCommand get(TxnId txnId)
     {
         SafeCommand safeCommand = getInternal(txnId);
         return maybeTruncate(safeCommand, safeCommand.current(), null, null);
+    }
+
+    public SafeCommand getForReplay(TxnId txnId)
+    {
+        return getInternal(txnId);
     }
 
     public SafeCommand unsafeGet(TxnId txnId)
@@ -206,9 +218,32 @@ public abstract class SafeCommandStore
     {
         updateMaxConflicts(prev, updated);
         updateCommandsForKey(prev, updated);
+        updateExclusiveSyncPoint(prev, updated);
     }
 
-    private void updateMaxConflicts(Command prev, Command updated)
+    public void updateExclusiveSyncPoint(Command prev, Command updated)
+    {
+        if (updated.txnId().kind() != Kind.ExclusiveSyncPoint || updated.txnId().domain() != Domain.Range) return;
+        if (updated.route() == null) return;
+
+        SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
+        SaveStatus newSaveStatus = updated.saveStatus();
+
+        TxnId txnId = updated.txnId();
+        if (newSaveStatus.known.isDefinitionKnown() && !oldSaveStatus.known.isDefinitionKnown())
+        {
+            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            commandStore().markExclusiveSyncPoint(this, txnId, ranges);
+        }
+
+        if (newSaveStatus == Applied && oldSaveStatus != Applied)
+        {
+            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            commandStore().markExclusiveSyncPointLocallyApplied(this, txnId, ranges);
+        }
+    }
+
+    public void updateMaxConflicts(Command prev, Command updated)
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
@@ -222,7 +257,7 @@ public abstract class SafeCommandStore
         commandStore().updateMaxConflicts(prev, updated);
     }
 
-    private void updateCommandsForKey(Command prev, Command next)
+    public void updateCommandsForKey(Command prev, Command next)
     {
         if (!CommandsForKey.needsUpdate(prev, next))
             return;
@@ -310,8 +345,6 @@ public abstract class SafeCommandStore
     public abstract ProgressLog progressLog();
     public abstract NodeTimeService time();
     public abstract CommandStores.RangesForEpoch ranges();
-
-    public abstract void registerHistoricalTransactions(Deps deps);
 
     public boolean isTruncated(Command command)
     {

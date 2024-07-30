@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import javax.annotation.Nullable;
 
 import accord.api.Key;
 import accord.api.Result;
@@ -53,8 +54,6 @@ import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
-
-import javax.annotation.Nullable;
 
 import static accord.local.Command.AbstractCommand.validate;
 import static accord.local.SaveStatus.AcceptedInvalidate;

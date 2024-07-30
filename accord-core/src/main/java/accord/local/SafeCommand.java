@@ -64,7 +64,7 @@ public abstract class SafeCommand
         return update;
     }
 
-     private <C extends Command> C incidentalUpdate(C update)
+    public  <C extends Command> C incidentalUpdate(C update)
     {
         if (current() == update)
             return update;

@@ -79,6 +79,7 @@ import accord.impl.list.ListStore;
 import accord.local.AgentExecutor;
 import accord.local.Command;
 import accord.local.Node.Id;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.NodeTimeService;
 import accord.local.SaveStatus;
@@ -219,19 +220,47 @@ public class Cluster implements Scheduler
             processNext(next);
     }
 
+    boolean hasNonRecurring()
+    {
+        boolean hasNonRecurring = false;
+        for (Pending p : pending)
+        {
+            if (!(p instanceof RecurringPendingRunnable))
+                continue;
+            RecurringPendingRunnable r = (RecurringPendingRunnable) p;
+            if (r.requeue.hasNonRecurring())
+            {
+                hasNonRecurring = true;
+                break;
+            }
+        }
+
+        return hasNonRecurring;
+    }
+
     public boolean processPending()
     {
         checkFailures.run();
-        if (pending.size() == recurring)
+        // All remaining tasks are recurring
+        if (recurring > 0 && pending.size() == recurring && !hasNonRecurring())
             return false;
 
-        Object next = pending.poll();
+        Pending next = pending.poll();
         if (next == null)
             return false;
 
         processNext(next);
+
         checkFailures.run();
         return true;
+    }
+
+    public void processAllNonRecurring()
+    {
+        pending.drain(item -> {
+            processNext(item);
+            checkFailures.run();
+        });
     }
 
     private void processNext(Object next)
@@ -257,7 +286,8 @@ public class Cluster implements Scheduler
                     else callback.success(deliver.src, reply);
                 }
             }
-            else journalLookup.apply(deliver.dst).handle((Request) deliver.message, deliver.src, deliver);
+
+            else on.receive((Request) deliver.message, deliver.src, deliver);
         }
         else
         {
@@ -274,19 +304,25 @@ public class Cluster implements Scheduler
     @Override
     public Scheduled recurring(Runnable run, long delay, TimeUnit units)
     {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(pending, run, delay, units);
-        ++recurring;
-        result.onCancellation(() -> --recurring);
-        pending.add(result, delay, units);
-        return result;
+        return recurring(run, () -> delay, units);
     }
 
     @Override
     public Scheduled once(Runnable run, long delay, TimeUnit units)
     {
-        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, delay, units);
+        RecurringPendingRunnable result = new RecurringPendingRunnable(null, run, () -> delay, units);
         pending.add(result, delay, units);
         return result;
+    }
+
+    public Scheduled recurring(Runnable run, LongSupplier delay, TimeUnit units)
+    {
+        RecurringPendingRunnable result = new RecurringPendingRunnable(pending, run, delay, units);
+        ++recurring;
+        result.onCancellation(() -> --recurring);
+        pending.add(result, delay.getAsLong(), units);
+        return result;
+
     }
 
     public void onDone(Runnable run)
@@ -461,8 +497,6 @@ public class Cluster implements Scheduler
             updateDurabilityRate.run();
             schemaApply.onUpdate(topology);
 
-            // startup
-            journalMap.entrySet().forEach(e -> e.getValue().start(nodeMap.get(e.getKey())));
             AsyncResult<?> startup = AsyncChains.reduce(nodeMap.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
             while (sinks.processPending());
             Assertions.assertTrue(startup.isDone());
@@ -475,11 +509,56 @@ public class Cluster implements Scheduler
             }, 5L, SECONDS);
 
             Scheduled reconfigure = sinks.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
+
+//            Scheduled purge = sinks.recurring(() -> {
+//                trace.debug("Triggering purge.");
+//                int numNodes = random.nextInt(1, nodeMap.size());
+//                for (int i = 0; i < numNodes; i++)
+//                {
+//                    Id id = random.pick(nodes);
+//                    Node node = nodeMap.get(id);
+//
+//                    Journal journal = journalMap.get(node.id());
+//                    CommandStore[] stores = nodeMap.get(node.id()).commandStores().all();
+//                    journal.purge((j) -> stores[j]);
+//                }
+//            }, () -> random.nextInt(1, 10), SECONDS);
+
+            Scheduled restart = sinks.recurring(() -> {
+                sinks.processAllNonRecurring();
+
+                // Journal cleanup is a rough equivalent of a node restart.
+                trace.debug("Triggering journal cleanup.");
+                Id id = random.pick(nodes);
+                Node node = nodeMap.get(id);
+                CommandsForKey.disableLinearizabilityViolationsReporting();
+                NodeSink messaging = ((NodeSink)node.messageSink());
+                messaging.disable();
+                ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
+                listStore.clear();
+
+                Journal journal = journalMap.get(id);
+                CommandStore[] stores = nodeMap.get(id).commandStores().all();
+                for (CommandStore s : stores)
+                {
+                    DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
+                    store.clearForTesting();
+                    journal.reconstructAll(store.loader(), store.id());
+                    journal.loadHistoricalTransactions(store::load, store.id());
+                }
+                sinks.processAllNonRecurring();
+                CommandsForKey.enableLinearizabilityViolationsReporting();
+                trace.debug("Done with cleanup.");
+                messaging.enable();
+            }, () -> random.nextInt(1, 10), SECONDS);
+
             durabilityScheduling.forEach(CoordinateDurabilityScheduling::start);
             services.forEach(Service::start);
 
             noMoreWorkSignal.accept(() -> {
                 reconfigure.cancel();
+//                purge.cancel();
+                restart.cancel();
                 durabilityScheduling.forEach(CoordinateDurabilityScheduling::stop);
                 services.forEach(Service::close);
             });
@@ -517,7 +596,6 @@ public class Cluster implements Scheduler
         }
         finally
         {
-            journalMap.values().forEach(Journal::shutdown);
             nodeMap.values().forEach(Node::shutdown);
         }
     }
