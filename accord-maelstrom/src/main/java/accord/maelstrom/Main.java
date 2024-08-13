@@ -37,7 +37,9 @@ import accord.config.MutableLocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.Timeout;
 import accord.impl.InMemoryCommandStores;
-import accord.impl.SimpleProgressLog;
+import accord.impl.DefaultLocalListeners;
+import accord.impl.progresslog.DefaultProgressLogs;
+import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.local.AgentExecutor;
 import accord.local.Node;
@@ -46,7 +48,6 @@ import accord.local.NodeTimeService;
 import accord.local.ShardDistributor;
 import accord.maelstrom.Packet.Type;
 import accord.messages.Callback;
-import accord.messages.LocalRequest;
 import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
@@ -177,11 +178,12 @@ public class Main
             topology = topologyFactory.toTopology(init.cluster);
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
             LocalConfig localConfig = new MutableLocalConfig();
-            on = new Node(init.self, sink, LocalRequest::simpleHandler, new SimpleConfigService(topology),
+            on = new Node(init.self, sink, new SimpleConfigService(topology),
                           System::currentTimeMillis, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, System::currentTimeMillis),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,
-                          SimpleProgressLog::new, InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
+                          DefaultRemoteListeners::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
+                          InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
                           localConfig);
             awaitUninterruptibly(on.unsafeStart());
             err.println("Initialized node " + init.self);

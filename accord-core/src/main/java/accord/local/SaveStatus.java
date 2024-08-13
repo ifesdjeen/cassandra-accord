@@ -20,21 +20,14 @@ package accord.local;
 
 import accord.local.Status.*;
 import accord.primitives.Ballot;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
 
 import static accord.local.SaveStatus.LocalExecution.CleaningUp;
 import static accord.local.SaveStatus.LocalExecution.NotReady;
 import static accord.local.Status.Definition.DefinitionErased;
 import static accord.local.Status.Definition.DefinitionKnown;
 import static accord.local.Status.Definition.DefinitionUnknown;
-import static accord.local.Status.Known.Apply;
-import static accord.local.Status.Known.Decision;
-import static accord.local.Status.Known.ExecuteAtOnly;
-import static accord.local.Status.Known.Nothing;
 import static accord.local.Status.KnownDeps.*;
 import static accord.local.Status.KnownExecuteAt.*;
-import static accord.local.Status.KnownRoute.Covering;
 import static accord.local.Status.KnownRoute.Full;
 import static accord.local.Status.KnownRoute.Maybe;
 import static accord.local.Status.Outcome.Unknown;
@@ -64,7 +57,7 @@ public enum SaveStatus
     Accepted                        (Status.Accepted),
     AcceptedWithDefinition          (Status.Accepted,              Full,     DefinitionKnown,   ExecuteAtProposed, DepsProposed, Unknown),
     PreCommitted                    (Status.PreCommitted,                                                                                          LocalExecution.ReadyToExclude),
-    PreCommittedWithAcceptedDeps    (Status.PreCommitted,          Covering, DefinitionUnknown, ExecuteAtKnown,    DepsProposed, Unknown,          LocalExecution.ReadyToExclude),
+    PreCommittedWithAcceptedDeps    (Status.PreCommitted,          Full,     DefinitionUnknown, ExecuteAtKnown,    DepsProposed, Unknown,          LocalExecution.ReadyToExclude),
     PreCommittedWithDefinition      (Status.PreCommitted,          Full,     DefinitionKnown,   ExecuteAtKnown,    DepsUnknown,  Unknown,          LocalExecution.ReadyToExclude),
     PreCommittedWithDefinitionAndAcceptedDeps(Status.PreCommitted, Full,     DefinitionKnown,   ExecuteAtKnown,    DepsProposed, Unknown,          LocalExecution.ReadyToExclude),
     Committed                       (Status.Committed,                                                                                             LocalExecution.ReadyToExclude),
@@ -91,51 +84,50 @@ public enum SaveStatus
      */
     public enum LocalExecution
     {
-        NotReady(Nothing),
-        ReadyToExclude(ExecuteAtOnly),
-        WaitingToExecute(Decision),
-        ReadyToExecute(Decision),
-        // TODO (expected): we seem to be able to await this when we know there are still local execution dependencies
-        //   we should only request this when we know the transaction can execute locally
-        WaitingToApply(Apply),
-        Applying(Apply),
-        Applied(Apply),
-        CleaningUp(Nothing);
+        /**
+         * Still coordinating a decision
+         */
+        NotReady,
 
-        public final Known requires;
+        /**
+         * An executeAt decision has been made, but the dependencies are not known
+         */
+        ReadyToExclude,
 
-        LocalExecution(Known requires)
-        {
-            this.requires = requires;
-        }
+        /**
+         * A complete execution decision has been made, but the dependencies have not executed
+         */
+        WaitingToExecute,
 
-        public boolean isSatisfiedBy(Known known)
-        {
-            return requires.isSatisfiedBy(known);
-        }
+        /**
+         * The command is ready to execute, and a coordinator should promptly compute and distribute the command's outcome
+         */
+        ReadyToExecute,
 
-        public long fetchEpoch(TxnId txnId, Timestamp timestamp)
-        {
-            if (timestamp == null || timestamp.equals(Timestamp.NONE))
-                return txnId.epoch();
+        /**
+         * The command has been executed and its outcome is known, but we have not locally executed all of its dependencies
+         * TODO (expected): we should only await this when we have no local execution dependencies, or we know that
+         *   the command is durable remotely
+         */
+        WaitingToApply,
 
-            switch (this)
-            {
-                default: throw new AssertionError("Unexpected status: " + this);
-                case NotReady:
-                case ReadyToExclude:
-                case ReadyToExecute:
-                case WaitingToExecute:
-                    return txnId.epoch();
+        /**
+         * The command is being asynchronously applied to the local data store
+         */
+        Applying,
 
-                case WaitingToApply:
-                case Applying:
-                case Applied:
-                case CleaningUp:
-                    return timestamp.epoch();
-            }
-        }
+        /**
+         * The command has been applied to the local data store
+         */
+        Applied,
+
+        /**
+         * Some or all of the command's local state has been garbage collected
+         */
+        CleaningUp;
     }
+
+    private static final SaveStatus[] lookup = values();
 
     public final Status status;
     public final Phase phase;
@@ -246,11 +238,17 @@ public enum SaveStatus
         }
     }
 
+    private static final Known DefinitionOnly = new Known(Full, DefinitionKnown, ExecuteAtUnknown, DepsUnknown, Unknown);
+    public static SaveStatus withDefinition(SaveStatus status)
+    {
+        return enrich(status, DefinitionOnly);
+    }
+
     public static SaveStatus enrich(SaveStatus status, Known known)
     {
+        // most statuses already know everything they can
         switch (status.status)
         {
-            // most statuses already know everything they can
             case NotDefined:
             case PreAccepted:
             case Accepted:
@@ -260,6 +258,7 @@ public enum SaveStatus
                 if (known.isSatisfiedBy(status.known))
                     return status;
                 return get(status.status, status.known.atLeast(known));
+
             case Stable:
                 return status;
 
@@ -339,5 +338,12 @@ public enum SaveStatus
             return true;
 
         return false;
+    }
+
+    public static SaveStatus forOrdinal(int ordinal)
+    {
+        if (ordinal < 0 || ordinal > lookup.length)
+            throw new IndexOutOfBoundsException(ordinal);
+        return lookup[ordinal];
     }
 }

@@ -168,6 +168,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                 }
 
                 FetchResponse ok = (FetchResponse) reply;
+                // TODO (required): implement support for notReady and retryInFutureEpoch, or else have option of disabling this behaviour on recipient
                 Ranges received;
                 if (ok.unavailable != null)
                 {
@@ -177,7 +178,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                         inflight.remove(key).cancel();
                         return;
                     }
-                    received = ranges.subtract(ok.unavailable);
+                    received = ranges.without(ok.unavailable);
                 }
                 else
                 {
@@ -275,11 +276,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Throwable fail)
+        protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Throwable fail)
         {
             // TODO (review): If the fetch response actually does some streaming, but we send back the error
             // it is a lot of work and data that might move and be unaccounted for at the coordinator
-            node.reply(replyTo, replyContext, fail == null ? new FetchResponse(unavailable, data, maxApplied()) : null, fail);
+            node.reply(replyTo, replyContext, fail == null ? new FetchResponse(unavailable, notReady, data, maxApplied()) : null, fail);
         }
 
         protected Timestamp maxApplied()
@@ -297,9 +298,9 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     public static class FetchResponse extends ReadOk
     {
         public final @Nullable Timestamp maxApplied;
-        public FetchResponse(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Timestamp maxApplied)
+        public FetchResponse(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Timestamp maxApplied)
         {
-            super(unavailable, data);
+            super(unavailable, notReady, data);
             this.maxApplied = maxApplied;
         }
 

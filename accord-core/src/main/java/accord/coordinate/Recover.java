@@ -27,9 +27,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
+import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Invoke;
-import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RecoveryTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -39,8 +39,6 @@ import accord.messages.BeginRecovery.RecoverOk;
 import accord.messages.BeginRecovery.RecoverReply;
 import accord.messages.Callback;
 import accord.messages.Commit;
-import accord.messages.WaitOnCommit;
-import accord.messages.WaitOnCommit.WaitOnCommitOk;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -76,47 +74,9 @@ import static accord.utils.Invariants.illegalState;
 // TODO (low priority, cleanup): rename to Recover (verb); rename Recover message to not clash
 // TODO (expected): do not recover transactions that are known to be Stable and waiting to execute.
 // TODO (expected): separate out recovery of sync points from standard transactions
+// TODO (required): do not wait for a quorum if we find enough information to execute
 public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throwable>
 {
-    class AwaitCommit extends AsyncResults.SettableResult<Timestamp> implements Callback<WaitOnCommitOk>
-    {
-        // TODO (desired, efficiency): this should collect the executeAt of any commit, and terminate as soon as one is found
-        //                             that is earlier than TxnId for the Txn we are recovering; if all commits we wait for
-        //                             are given earlier timestamps we can retry without restarting.
-        final QuorumTracker tracker;
-
-        AwaitCommit(Node node, TxnId txnId, Participants<?> participants)
-        {
-            Topology topology = node.topology().globalForEpoch(txnId.epoch()).forSelection(participants);
-            this.tracker = new QuorumTracker(new Topologies.Single(node.topology().sorter(), topology));
-            node.send(topology.nodes(), to -> new WaitOnCommit(to, topology, txnId, participants), this);
-        }
-
-        @Override
-        public synchronized void onSuccess(Id from, WaitOnCommitOk reply)
-        {
-            if (isDone()) return;
-
-            if (tracker.recordSuccess(from) == Success)
-                trySuccess(null);
-        }
-
-        @Override
-        public synchronized void onFailure(Id from, Throwable failure)
-        {
-            if (isDone()) return;
-
-            if (tracker.recordFailure(from) == Failed)
-                tryFailure(new Timeout(txnId, route.homeKey()));
-        }
-
-        @Override
-        public void onCallbackFailure(Id from, Throwable failure)
-        {
-            tryFailure(failure);
-        }
-    }
-
     AsyncResult<Object> awaitCommits(Node node, Deps waitOn)
     {
         AtomicInteger remaining = new AtomicInteger(waitOn.txnIdCount());
@@ -124,10 +84,12 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
         for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
         {
             TxnId txnId = waitOn.txnId(i);
-            new AwaitCommit(node, txnId, waitOn.participants(txnId)).addCallback((success, failure) -> {
+            Participants<?> participants = waitOn.participants(txnId);
+            Topology topology = node.topology().globalForEpoch(txnId.epoch()).forSelection(participants);
+            SynchronousAwait.awaitQuorum(node, topology, txnId, route.homeKey(), BlockedUntil.HasCommittedDeps, participants).addCallback((success, failure) -> {
                 if (result.isDone())
                     return;
-                if (success != null && remaining.decrementAndGet() == 0)
+                if (failure == null && remaining.decrementAndGet() == 0)
                     result.setSuccess(success);
                 else
                     result.tryFailure(failure);
@@ -388,14 +350,14 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
                 withDeps.accept(null, CoordinationFailed.wrap(withEpochFailure));
                 return;
             }
-            Seekables<?, ?> missing = txn.keys().subtract(merged.sufficientFor);
+            Seekables<?, ?> missing = txn.keys().without(merged.sufficientFor);
             if (missing.isEmpty())
             {
                 withDeps.accept(merged.deps, null);
             }
             else
             {
-                CollectDeps.withDeps(node, txnId, route, missing.toParticipants(), missing, executeAt, (extraDeps, fail) -> {
+                CollectCalculatedDeps.withCalculatedDeps(node, txnId, route, missing.toParticipants(), missing, executeAt, (extraDeps, fail) -> {
                     if (fail != null)
                     {
                         isDone = true;

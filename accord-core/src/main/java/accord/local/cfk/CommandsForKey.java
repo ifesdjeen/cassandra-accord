@@ -31,6 +31,7 @@ import accord.api.Key;
 import accord.api.VisibleForImplementation;
 import accord.impl.CommandsSummary;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -41,8 +42,6 @@ import accord.local.SafeCommandStore.TestStatus;
 import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.primitives.Ballot;
-import accord.primitives.Keys;
-import accord.primitives.Participants;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
@@ -51,6 +50,8 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
 
+import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.local.cfk.CommandsForKey.InternalStatus.ACCEPTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
@@ -64,11 +65,10 @@ import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
-import static accord.local.SaveStatus.LocalExecution.WaitingToApply;
-import static accord.local.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
 import static accord.utils.Invariants.Paranoia.SUPERLINEAR;
@@ -165,15 +165,16 @@ import static accord.utils.SortedArrays.Search.FAST;
  * TODO (expected): avoid updating transactions we don't manage the execution of - perhaps have a dedicated InternalStatus
  * TODO (expected): minimise repeated notification, either by logic or marking a command as notified once ready-to-execute
  * TODO (required): linearizability violation detection
+ * TODO (expected): cleanup unmanaged transitively known transactions
  * TODO (desired): introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
  * TODO (expected): use locallyAppliedOrInvalidatedBefore to advance minUndecided and as a lower bound for triggering execution
+ * TODO (desired): store missing transactions against the highest known transaction only (this should also permit us to prune better by ignoring the missing collection contents)
  */
 public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSummary
 {
     private static final boolean ELIDE_TRANSITIVE_DEPENDENCIES = true;
 
     public static final RedundantBefore.Entry NO_REDUNDANT_BEFORE = new RedundantBefore.Entry(null, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, null);
-    public static final TxnId[] NO_TXNIDS = new TxnId[0];
     public static final TxnInfo NO_INFO = new TxnInfo(TxnId.NONE, HISTORICAL, TxnId.NONE);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
     public static final Unmanaged[] NO_PENDING_UNMANAGED = new Unmanaged[0];
@@ -777,9 +778,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return prunedBefore;
     }
 
-    public TxnId locallyRedundantBefore()
+    public TxnId locallyRedundantOrBootstrappedBefore()
     {
-        return redundantBefore.locallyRedundantBefore();
+        return redundantBefore.locallyRedundantOrBootstrappedBefore();
     }
 
     public TxnId shardRedundantBefore()
@@ -787,12 +788,27 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return redundantBefore.shardRedundantBefore();
     }
 
-    public TxnId nextWaitingToApply(Kinds kinds)
+    private TxnId nextWaitingToApply(Kinds kinds, @Nullable Timestamp untilExecuteAt)
     {
         int i = maxAppliedWriteByExecuteAt + 1;
-        while (i < committedByExecuteAt.length && (committedByExecuteAt[i].status != APPLIED || !kinds.test(committedByExecuteAt[i].kind())))
+        while (i < committedByExecuteAt.length && (committedByExecuteAt[i].status == APPLIED || !kinds.test(committedByExecuteAt[i].kind())))
+        {
+            if (untilExecuteAt != null && committedByExecuteAt[i].compareTo(untilExecuteAt) >= 0)
+                return null;
+
             ++i;
+        }
         return i >= committedByExecuteAt.length ? null : committedByExecuteAt[i];
+    }
+
+    public TxnId blockedOnTxnId(TxnId txnId, Timestamp executeAt)
+    {
+        TxnInfo minUndecided = minUndecided();
+        if (minUndecided != null && minUndecided.compareTo(txnId) < 0)
+            return minUndecided.plainTxnId();
+
+        Kinds kinds = txnId.kind().witnesses();
+        return nextWaitingToApply(kinds, executeAt);
     }
 
     /**
@@ -1066,7 +1082,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     // TODO (required): additional linearizability violation detection, based on expectation of presence in missing set
 
-    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, Object[] newLoadingPruned, TxnId plainTxnId, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
+    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, Object[] newLoadingPruned, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
     {
         return new CommandsForKey(key, redundantBefore, prunedBefore, newLoadingPruned, newById, newCommittedByExecuteAt, newMinUndecidedById, newMaxAppliedWriteByExecuteAt, unmanageds)
                .notifyUnmanaged(curInfo, newInfo);
@@ -1082,20 +1098,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return new CommandsForKey(key, redundantBefore, prunedBefore, newLoadingPruned, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, unmanageds);
     }
 
-    private void notifyWaitingOnCommit(SafeCommandStore safeStore, TxnInfo uncommitted, NotifySink notifySink)
+    CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand)
     {
-        if (redundantBefore.endEpoch > uncommitted.epoch())
-            notifySink.waitingOnCommit(safeStore, uncommitted, key);
-    }
-
-    CommandsForKeyUpdate registerUnmanaged(SafeCommandStore safeStore, SafeCommand safeCommand)
-    {
-        return registerUnmanaged(safeStore, safeCommand, NotifySink.DefaultNotifySink.INSTANCE);
-    }
-
-    CommandsForKeyUpdate registerUnmanaged(SafeCommandStore safeStore, SafeCommand safeCommand, NotifySink notifySink)
-    {
-        return Updating.updateUnmanaged(this, safeStore, safeCommand, notifySink, true, null);
+        return Updating.updateUnmanaged(this, safeCommand, true, null);
     }
 
     private CommandsForKeyUpdate notifyUnmanaged(@Nullable TxnInfo curInfo, TxnInfo newInfo)
@@ -1106,8 +1111,8 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink)
     {
         TxnInfo minUndecided = minUndecided();
-        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()))
-            notifyWaitingOnCommit(safeStore, minUndecided, notifySink);
+        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()) && redundantBefore.endEpoch > minUndecided.epoch())
+            notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
 
         if (command == null || !command.hasBeen(Status.Committed) || !managesExecution(command.txnId()))
             return;
@@ -1192,7 +1197,6 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     private void notifyManaged(SafeCommandStore safeStore, Kinds kinds, int mayNotExecuteBeforeIndex, int mayExecuteToIndex, int mayExecuteAny, NotifySink notifySink)
     {
-        Participants<?> asParticipants = null;
         int undecidedIndex = minUndecidedById < 0 ? byId.length : minUndecidedById;
         long unappliedCounters = 0L;
         TxnInfo minUndecided = minUndecided();
@@ -1211,9 +1215,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                     case COMMITTED:
                     {
                         // cannot execute as dependencies not stable, so notify progress log to get or decide stable deps
-                        if (asParticipants == null)
-                            asParticipants = Keys.of(key).toParticipants();
-                        safeStore.progressLog().waiting(txn.plainTxnId(), WaitingToExecute, null, asParticipants);
+                        notifySink.waitingOn(safeStore, txn, key, SaveStatus.Stable, HasStableDeps, true);
                         break;
                     }
 
@@ -1259,9 +1261,8 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                         {
                             TxnId txnId = txn.plainTxnId();
                             notifySink.notWaiting(safeStore, txnId, key);
-                            if (asParticipants == null)
-                                asParticipants = Keys.of(key).toParticipants();
-                            safeStore.progressLog().waiting(txnId, WaitingToApply, null, asParticipants);
+                            // TODO (required): avoid invoking this here; we may do redundant work if we have local dependencies we're already waiting on
+                            notifySink.waitingOn(safeStore, txn, key, SaveStatus.PreApplied, CanApply, false);
                         }
                     }
                 }
@@ -1399,6 +1400,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     TxnInfo minUndecided()
     {
         return minUndecidedById < 0 ? null : byId[minUndecidedById];
+    }
+
+    public TxnId minUndecidedTxnId()
+    {
+        return minUndecidedById < 0 ? null : byId[minUndecidedById].plainTxnId();
     }
 
     int maxContiguousManagedAppliedIndex()

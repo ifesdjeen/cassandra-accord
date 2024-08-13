@@ -101,7 +101,7 @@ abstract class PostProcess
         {
             if (txnIds.length == 0)
                 return result;
-            return new CommandsForKeyUpdate.CommandsForKeyUpdateWithNotifier(result.cfk(), new LoadPruned(result.postProcess(), txnIds));
+            return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(result.cfk(), new LoadPruned(result.postProcess(), txnIds));
         }
     }
 
@@ -137,12 +137,18 @@ abstract class PostProcess
             SafeCommandsForKey safeCfk = safeStore.get(key);
             CommandsForKey cfk = safeCfk.current();
             List<CommandsForKey.Unmanaged> addUnmanageds = new ArrayList<>();
+            List<PostProcess> nestedNotify = new ArrayList<>();
             for (TxnId txnId : notify)
             {
                 SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
                 if (safeCommand != null)
                 {
-                    Invariants.checkState(cfk == updateUnmanaged(cfk, safeStore, safeCommand, notifySink, false, addUnmanageds));
+                    CommandsForKeyUpdate update = updateUnmanaged(cfk, safeCommand, false, addUnmanageds);
+                    if (update != cfk)
+                    {
+                        Invariants.checkState(update.cfk() == cfk);
+                        nestedNotify.add(update.postProcess());
+                    }
                 }
                 else
                 {
@@ -158,6 +164,9 @@ abstract class PostProcess
                 newUnmanageds = SortedArrays.linearUnion(cur.unmanageds, 0, cur.unmanageds.length, newUnmanageds, 0, newUnmanageds.length, CommandsForKey.Unmanaged::compareTo, ArrayBuffers.uncached(CommandsForKey.Unmanaged[]::new));
                 safeCfk.set(cur.update(newUnmanageds));
             }
+
+            for (PostProcess postProcess : nestedNotify)
+                postProcess.postProcess(safeStore, key, notifySink);
         }
     }
 
@@ -239,7 +248,7 @@ abstract class PostProcess
         if (notifier == null)
             return cfk;
 
-        return new CommandsForKeyUpdate.CommandsForKeyUpdateWithNotifier(new CommandsForKey(cfk, cfk.loadingPruned, unmanageds), notifier);
+        return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(new CommandsForKey(cfk, cfk.loadingPruned, unmanageds), notifier);
     }
 
 }

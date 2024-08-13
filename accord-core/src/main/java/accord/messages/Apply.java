@@ -21,7 +21,6 @@ package accord.messages;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
-import accord.api.RoutingKey;
 import accord.local.Commands;
 import accord.local.KeyHistory;
 import accord.local.Node;
@@ -87,13 +86,6 @@ public class Apply extends TxnRequest<ApplyReply>
         this.result = result;
     }
 
-    public static void sendMaximal(Node node, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
-    {
-        Topologies executes = executes(node, route, executeAt);
-        Topologies participates = participates(node, route, txnId, executeAt, executes);
-        node.send(participates.nodes(), to -> applyMaximal(FACTORY, to, participates, txnId, route, txn, executeAt, deps, writes, result));
-    }
-
     public static void sendMaximal(Node node, Id to, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result)
     {
         Topologies executes = executes(node, route, executeAt);
@@ -109,11 +101,6 @@ public class Apply extends TxnRequest<ApplyReply>
     public static Topologies participates(Node node, Unseekables<?> route, TxnId txnId, Timestamp executeAt, Topologies executes)
     {
         return txnId.epoch() == executeAt.epoch() ? executes : node.topology().preciseEpochs(route, txnId.epoch(), executeAt.epoch());
-    }
-
-    public static Apply applyMinimal(Factory factory, Id to, Topologies all, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result)
-    {
-        return factory.create(Kind.Minimal, to, all, txnId, route, txn, executeAt, stableDeps, writes, result);
     }
 
     public static Apply applyMaximal(Factory factory, Id to, Topologies participates, TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result)
@@ -141,22 +128,21 @@ public class Apply extends TxnRequest<ApplyReply>
         node.mapReduceConsumeLocal(this, txnId.epoch(), executeAt.epoch(), this);
     }
 
-
     @Override
     public ApplyReply apply(SafeCommandStore safeStore)
     {
-        return apply(safeStore, txn, txnId, executeAt, deps, fullRoute != null ? fullRoute : scope, writes, result, progressKey);
+        return apply(safeStore, txn, txnId, executeAt, deps, fullRoute != null ? fullRoute : scope, writes, result);
     }
 
-    public static ApplyReply apply(SafeCommandStore safeStore, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result, RoutingKey progressKey)
+    public static ApplyReply apply(SafeCommandStore safeStore, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
         SafeCommand safeCommand = safeStore.get(txnId, executeAt, route);
-        return apply(safeStore, safeCommand, txn, txnId, executeAt, deps, route, writes, result, progressKey);
+        return apply(safeStore, safeCommand, txn, txnId, executeAt, deps, route, writes, result);
     }
 
-    public static ApplyReply apply(SafeCommandStore safeStore, SafeCommand safeCommand, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result, RoutingKey progressKey)
+    public static ApplyReply apply(SafeCommandStore safeStore, SafeCommand safeCommand, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
-        switch (Commands.apply(safeStore, safeCommand, txnId, route, progressKey, executeAt, deps, txn, writes, result))
+        switch (Commands.apply(safeStore, safeCommand, txnId, route, executeAt, deps, txn, writes, result))
         {
             default:
             case Insufficient:

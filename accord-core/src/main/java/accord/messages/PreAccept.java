@@ -41,9 +41,9 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
 
     public static class SerializerSupport
     {
-        public static PreAccept create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, boolean doNotComputeProgressKey, long maxEpoch, PartialTxn partialTxn, @Nullable FullRoute<?> fullRoute)
+        public static PreAccept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, long maxEpoch, PartialTxn partialTxn, @Nullable FullRoute<?> fullRoute)
         {
-            return new PreAccept(txnId, scope, waitForEpoch, minEpoch, doNotComputeProgressKey, maxEpoch, partialTxn, fullRoute);
+            return new PreAccept(txnId, scope, waitForEpoch, minEpoch, maxEpoch, partialTxn, fullRoute);
         }
     }
 
@@ -60,9 +60,9 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
         this.route = route;
     }
 
-    PreAccept(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, boolean doNotComputeProgressKey, long maxEpoch, PartialTxn partialTxn, @Nullable FullRoute<?> fullRoute)
+    PreAccept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, long maxEpoch, PartialTxn partialTxn, @Nullable FullRoute<?> fullRoute)
     {
-        super(txnId, scope, waitForEpoch, minEpoch, doNotComputeProgressKey);
+        super(txnId, scope, waitForEpoch, minEpoch);
         this.partialTxn = partialTxn;
         this.maxEpoch = maxEpoch;
         this.route = fullRoute;
@@ -89,7 +89,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
     @Override
     protected void process()
     {
-        node.mapReduceConsumeLocal(this, minUnsyncedEpoch, maxEpoch, this);
+        node.mapReduceConsumeLocal(this, minEpoch, maxEpoch, this);
     }
 
     protected PreAcceptReply applyIfDoesNotCoordinate(SafeCommandStore safeStore)
@@ -97,10 +97,10 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
         // we only preaccept in the coordination epoch, but we might contact other epochs for dependencies
         // TODO (required): for recovery we need to update CommandsForKeys et al, even if we don't participate in coordination.
         //      must consider cleanup though. (alternative is to make recovery more complicated)
-        Ranges ranges = safeStore.ranges().allBetween(minUnsyncedEpoch, txnId);
+        Ranges ranges = safeStore.ranges().allBetween(minEpoch, txnId);
         if (txnId.kind() == ExclusiveSyncPoint)
             safeStore.commandStore().markExclusiveSyncPoint(safeStore, txnId, ranges);
-        return new PreAcceptOk(txnId, txnId, calculatePartialDeps(safeStore, txnId, partialTxn.keys(), scope, EpochSupplier.constant(minUnsyncedEpoch), txnId, ranges));
+        return new PreAcceptOk(txnId, txnId, calculatePartialDeps(safeStore, txnId, partialTxn.keys(), scope, EpochSupplier.constant(minEpoch), txnId, ranges));
     }
 
     @Override
@@ -110,11 +110,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
         // note: this diverges from the paper, in that instead of waiting for JoinShard,
         //       we PreAccept to both old and new topologies and require quorums in both.
         //       This necessitates sending to ALL replicas of old topology, not only electorate (as fast path may be unreachable).
-        if (minUnsyncedEpoch < txnId.epoch() && !safeStore.ranges().coordinates(txnId).intersects(scope))
+        if (minEpoch < txnId.epoch() && !safeStore.ranges().coordinates(txnId).intersects(scope))
             return applyIfDoesNotCoordinate(safeStore);
 
         SafeCommand safeCommand = safeStore.get(txnId, this, route);
-        switch (Commands.preaccept(safeStore, safeCommand, txnId, maxEpoch, partialTxn, route, progressKey))
+        switch (Commands.preaccept(safeStore, safeCommand, txnId, maxEpoch, partialTxn, route))
         {
             default:
             case Success:
@@ -127,9 +127,9 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
                 // don't need to perform an Accept round, nor do we need to persist this state to aid recovery. We just
                 // want the issuer of the sync point to know which transactions to wait for before it can safely treat
                 // all transactions with lower txnId as expired.
-                Ranges ranges = safeStore.ranges().allBetween(minUnsyncedEpoch, txnId);
+                Ranges ranges = safeStore.ranges().allBetween(minEpoch, txnId);
                 return new PreAcceptOk(txnId, command.executeAt(),
-                                       calculatePartialDeps(safeStore, txnId, command.partialTxn().keys(), scope, EpochSupplier.constant(minUnsyncedEpoch), txnId, ranges));
+                                       calculatePartialDeps(safeStore, txnId, command.partialTxn().keys(), scope, EpochSupplier.constant(minEpoch), txnId, ranges));
 
             case Truncated:
             case RejectedBallot:

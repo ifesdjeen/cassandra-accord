@@ -47,14 +47,14 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
 
     public GetMaxConflict(Node.Id to, Topologies topologies, FullRoute<?> route, Seekables<?, ?> keys, long executionEpoch)
     {
-        super(to, topologies, executionEpoch, route);
+        super(to, topologies, route);
         this.keys = keys.intersecting(scope);
         this.executionEpoch = executionEpoch;
     }
 
     protected GetMaxConflict(PartialRoute<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
     {
-        super(TxnId.NONE, scope, waitForEpoch, minEpoch, true);
+        super(TxnId.NONE, scope, waitForEpoch, minEpoch);
         this.keys = keys;
         this.executionEpoch = executionEpoch;
     }
@@ -62,13 +62,13 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
     @Override
     public void process()
     {
-        node.mapReduceConsumeLocal(this, minUnsyncedEpoch, executionEpoch, this);
+        node.mapReduceConsumeLocal(this, minEpoch, executionEpoch, this);
     }
 
     @Override
     public GetMaxConflictOk apply(SafeCommandStore safeStore)
     {
-        Ranges ranges = safeStore.ranges().allBetween(minUnsyncedEpoch, executionEpoch);
+        Ranges ranges = safeStore.ranges().allBetween(minEpoch, executionEpoch);
         Timestamp maxConflict = safeStore.commandStore().maxConflict(keys.slice(ranges));
         return new GetMaxConflictOk(maxConflict, Math.max(safeStore.time().epoch(), node.epoch()));
     }

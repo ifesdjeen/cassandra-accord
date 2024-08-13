@@ -20,6 +20,7 @@ package accord.impl;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nonnull;
 
@@ -27,9 +28,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
+import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.impl.mock.MockStore;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
@@ -136,6 +139,24 @@ public class TestAgent implements Agent
     public Txn emptySystemTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges)
     {
         return new Txn.InMemory(kind, keysOrRanges, MockStore.read(Keys.EMPTY), MockStore.QUERY, null);
+    }
+
+    @Override
+    public long attemptCoordinationDelay(TxnId txnId, CommandStore commandStore, TimeUnit units)
+    {
+        return units.convert(1L, SECONDS);
+    }
+
+    @Override
+    public long seekProgressDelay(int retryCount, TxnId txnId, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    {
+        return units.convert(1L, SECONDS);
+    }
+
+    @Override
+    public long retryAwaitTimeout(int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    {
+        return units.convert(1L, SECONDS);
     }
 
     @Override

@@ -405,7 +405,7 @@ public class TopologyRandomizer
             Ranges prev = current.rangesForNode(node);
             if (prev == null) prev = Ranges.EMPTY;
 
-            Ranges added = next.rangesForNode(node).subtract(prev);
+            Ranges added = next.rangesForNode(node).without(prev);
             if (added.isEmpty())
                 continue;
 

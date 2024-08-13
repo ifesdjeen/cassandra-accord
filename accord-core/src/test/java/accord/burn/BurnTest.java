@@ -23,6 +23,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -324,7 +325,7 @@ public class BurnTest
             long delay = retryRandom.nextInt(1, 15);
             queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
         };
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(1000L, failures::add, retryBootstrap, onStale);
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale);
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -338,7 +339,7 @@ public class BurnTest
                     .asLongSupplier(forked);
         };
 
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(1000L, failures::add, retryBootstrap, (i1, i2) -> {
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
         }));
         Int2ObjectHashMap<Verifier> validators = new Int2ObjectHashMap<>();
@@ -477,8 +478,8 @@ public class BurnTest
         }
 
         int observedOperations = acks.get() + recovered.get() + nacks.get() + lost.get() + truncated.get();
-        logger.info("Received {} acks, {} recovered, {} nacks, {} lost, {} truncated ({} total) to {} operations", acks.get(), recovered.get(), nacks.get(), lost.get(), truncated.get(), observedOperations, operations);
-        logger.info("Message counts: {}", messageStatsMap.entrySet());
+        logger.info("nodes: {}, rf: {}. Received {} acks, {} recovered, {} nacks, {} lost, {} truncated ({} total) to {} operations", nodes.size(), topologyFactory.rf, acks.get(), recovered.get(), nacks.get(), lost.get(), truncated.get(), observedOperations, operations);
+        logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
         logger.info("Took {} and in logical time of {}", Duration.ofNanos(System.nanoTime() - startNanos), Duration.ofMillis(queue.nowInMillis() - startLogicalMillis));
         if (clock.get() != operations * 2 || observedOperations != operations)
         {
@@ -496,6 +497,13 @@ public class BurnTest
             if (clock.get() != operations * 2) throw new AssertionError("Incomplete set of responses; clock=" + clock.get() + ", expected operations=" + (operations * 2));
             else throw new AssertionError("Incomplete set of responses; ack+recovered+other+nacks+lost+truncated=" + observedOperations + ", expected operations=" + (operations * 2));
         }
+    }
+
+    private static String statsInDescOrder(Map<MessageType, Stats> statsMap)
+    {
+        List<Stats> stats = new ArrayList<>(statsMap.values());
+        stats.sort(Comparator.comparingInt(s -> -s.count()));
+        return stats.toString();
     }
 
     private static Verifier createVerifier(String prefix, int keyCount)

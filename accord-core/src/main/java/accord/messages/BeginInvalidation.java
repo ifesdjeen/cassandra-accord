@@ -182,7 +182,7 @@ public class BeginInvalidation extends AbstractEpochRequest<BeginInvalidation.In
 
         public static Route<?> mergeRoutes(InvalidateReply[] invalidateOks)
         {
-            return mapReduceNonNull(ok -> (Route)ok.route, Route::union, invalidateOks);
+            return mapReduceNonNull(ok -> (Route)ok.route, Route::with, invalidateOks);
         }
 
         public static InvalidateReply max(InvalidateReply[] invalidateReplies, Shard shard, SortedList<Id> nodeIds)

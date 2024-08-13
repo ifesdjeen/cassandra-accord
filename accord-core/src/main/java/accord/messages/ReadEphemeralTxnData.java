@@ -109,8 +109,8 @@ public class ReadEphemeralTxnData extends ReadData
         if (retryInLaterEpoch > 0)
         {
             // TODO (expected): wait for all stores' results and report only the ranges that execute later to be retried
-            beginCancel(safeStore);
-            node.reply(replyTo, replyContext, new ReadOkWithFutureEpoch(null, null, retryInLaterEpoch), null);
+            cancel();
+            node.reply(replyTo, replyContext, new ReadOkWithFutureEpoch(null, null, null, retryInLaterEpoch), null);
         }
         super.read(safeStore, command);
     }
@@ -138,9 +138,9 @@ public class ReadEphemeralTxnData extends ReadData
 
 
     @Override
-    protected ReadOk constructReadOk(Ranges unavailable, Data data)
+    protected ReadOk constructReadOk(Ranges unavailable, Ranges notReady, Data data)
     {
-        return new ReadOkWithFutureEpoch(unavailable, data, 0);
+        return new ReadOkWithFutureEpoch(unavailable, notReady, data, 0);
     }
 
     @Override

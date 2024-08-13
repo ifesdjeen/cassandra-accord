@@ -94,7 +94,7 @@ public class BeginRecovery extends TxnRequest<BeginRecovery.RecoverReply>
     public RecoverReply apply(SafeCommandStore safeStore)
     {
         SafeCommand safeCommand = safeStore.get(txnId, txnId, route);
-        switch (Commands.recover(safeStore, safeCommand, txnId, partialTxn, route, progressKey, ballot))
+        switch (Commands.recover(safeStore, safeCommand, txnId, partialTxn, route, ballot))
         {
             default:
                 throw illegalState("Unhandled Outcome");

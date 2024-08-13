@@ -52,6 +52,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
         protected int contacted;
         protected int slow;
         protected Ranges unavailable;
+        protected Ranges notReady;
 
         public ReadShardTracker(Shard shard)
         {
@@ -87,6 +88,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
             if (isSlow) --slow;
             hasData = true;
             if (unavailable != null) unavailable = Ranges.EMPTY;
+            if (notReady != null) notReady = Ranges.EMPTY;
             return hadSucceeded ? NoChange : DataSuccess;
         }
 
@@ -94,11 +96,13 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
         {
             final boolean isSlow;
             final Ranges unavailable;
+            final Ranges notReady;
 
-            PartialReadSuccess(boolean isSlow, Ranges unavailable)
+            PartialReadSuccess(boolean isSlow, Ranges unavailable, Ranges notReady)
             {
                 this.isSlow = isSlow;
                 this.unavailable = unavailable;
+                this.notReady = notReady;
             }
         }
         /**
@@ -114,9 +118,19 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
                 return NoChange;
 
             // TODO (low priority, efficiency): support slice method accepting a single Range
-            if (unavailable == null) unavailable = partialSuccess.unavailable.slice(Ranges.of(shard.range));
-            else unavailable = unavailable.slice(partialSuccess.unavailable, Minimal);
-            if (!unavailable.isEmpty())
+            if (partialSuccess.unavailable != null)
+            {
+                if (unavailable == null) unavailable = partialSuccess.unavailable.slice(Ranges.of(shard.range));
+                else unavailable = unavailable.slice(partialSuccess.unavailable, Minimal);
+                
+            }
+            if (partialSuccess.notReady != null)
+            {
+                if (notReady == null) notReady = partialSuccess.notReady.slice(Ranges.of(shard.range));
+                else notReady = notReady.slice(partialSuccess.notReady, Minimal);
+            }
+
+            if ((unavailable != null && !unavailable.isEmpty()) || (notReady != null && !notReady.isEmpty()))
                 return ensureProgressOrFail();
 
             hasData = true;
@@ -199,6 +213,11 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
         {
             return unavailable;
         }
+
+        public Ranges notReady()
+        {
+            return notReady;
+        }
     }
 
     final Set<Id> inflight;    // TODO (easy, efficiency): use Agrona's IntHashSet as soon as Node.Id switches from long to int
@@ -259,10 +278,10 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
     /**
      * Record a response that immediately satisfies the criteria for the shards the node participates in
      */
-    protected RequestStatus recordPartialReadSuccess(Id from, Ranges unavailable)
+    protected RequestStatus recordPartialReadSuccess(Id from, Ranges unavailable, Ranges notReady)
     {
         boolean isSlow = receiveResponseIsSlow(from);
-        return recordResponse(this, from, ReadShardTracker::recordPartialReadSuccess, new PartialReadSuccess(isSlow, unavailable));
+        return recordResponse(this, from, ReadShardTracker::recordPartialReadSuccess, new PartialReadSuccess(isSlow, unavailable, notReady));
     }
 
     /**

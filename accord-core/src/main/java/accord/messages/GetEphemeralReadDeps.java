@@ -58,7 +58,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
 
     protected GetEphemeralReadDeps(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
     {
-        super(txnId, scope, waitForEpoch, minEpoch, true);
+        super(txnId, scope, waitForEpoch, minEpoch);
         this.keys = keys;
         this.executionEpoch = executionEpoch;
     }
@@ -66,14 +66,14 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public void process()
     {
-        node.mapReduceConsumeLocal(this, minUnsyncedEpoch, executionEpoch, this);
+        node.mapReduceConsumeLocal(this, minEpoch, executionEpoch, this);
     }
 
     @Override
     public GetEphemeralReadDepsOk apply(SafeCommandStore safeStore)
     {
-        Ranges ranges = safeStore.ranges().allBetween(minUnsyncedEpoch, executionEpoch);
-        PartialDeps deps = calculatePartialDeps(safeStore, txnId, keys, scope, constant(minUnsyncedEpoch), Timestamp.MAX, ranges);
+        Ranges ranges = safeStore.ranges().allBetween(minEpoch, executionEpoch);
+        PartialDeps deps = calculatePartialDeps(safeStore, txnId, keys, scope, constant(minEpoch), Timestamp.MAX, ranges);
 
         return new GetEphemeralReadDepsOk(deps, Math.max(safeStore.time().epoch(), node.epoch()));
     }

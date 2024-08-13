@@ -23,7 +23,7 @@ import java.util.Arrays;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.utils.ArrayBuffers;
+import accord.utils.ArrayBuffers.RecursiveObjectBuffers;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
@@ -31,10 +31,9 @@ import accord.utils.btree.BTreeRemoval;
 import accord.utils.btree.UpdateFunction;
 
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
-import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED;
-import static accord.local.cfk.CommandsForKey.NO_TXNIDS;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.Pruning.LoadingPruned.LOADINGF;
+import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 
@@ -195,22 +194,27 @@ public class Pruning
     /**
      * We can prune anything transitively applied where some later stable command replicates each of its missing array entries.
      * These later commands can durably stand in for any recovery or dependency calculations.
+     *
+     * TODO (desired): we could limit this restriction to epochs where ownership changes; introduce some global summary info to facilitate this
      */
     static CommandsForKey pruneBefore(CommandsForKey cfk, TxnInfo newPrunedBefore, int pos)
     {
         Invariants.checkArgument(newPrunedBefore.compareTo(cfk.prunedBefore) >= 0, "Expect new prunedBefore to be ahead of existing one");
 
         TxnInfo[] byId = cfk.byId;
-        int minUndecidedById = -1;
+        int minUndecidedById;
         int retainCount = 0, removedCommittedCount = 0;
+        // a store of committed executeAts we have removed where we cannot otherwise cheaply infer it
         Object[] removedExecuteAts = NO_TXNIDS;
         int removedExecuteAtCount = 0;
         TxnInfo[] newInfos;
         {
-            ArrayBuffers.RecursiveObjectBuffers<TxnId> missingBuffers = new ArrayBuffers.RecursiveObjectBuffers<>(cachedTxnIds());
+            minUndecidedById = cfk.minUndecidedById;
+            int minUndecidedByIdDelta = 0;
+            RecursiveObjectBuffers<TxnId> missingBuffers = new RecursiveObjectBuffers<>(cachedTxnIds());
             TxnId[] mergedMissing = newPrunedBefore.missing();
             int mergedMissingCount = mergedMissing.length;
-            for (int i = 0 ; i < pos ; ++i)
+            for (int i = pos - 1 ; i >= 0 ; --i)
             {
                 TxnInfo txn = byId[i];
                 switch (txn.status)
@@ -225,9 +229,9 @@ public class Pruning
                     case TRANSITIVELY_KNOWN:
                     case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
                     case ACCEPTED:
-                        if (minUndecidedById < 0 && managesExecution(txn))
-                            minUndecidedById = retainCount;
                         ++retainCount;
+                        if (i == minUndecidedById)
+                            minUndecidedByIdDelta = retainCount;
                         break;
 
                     case APPLIED:
@@ -245,6 +249,7 @@ public class Pruning
                                 ++removedCommittedCount;
                                 continue;
                             }
+
                             if (txn.executeAt == txn)
                             {
                                 mergedMissing = SortedArrays.linearUnion(missing, missing.length, mergedMissing, mergedMissingCount, missingBuffers);
@@ -263,31 +268,49 @@ public class Pruning
 
             int removedByIdCount = pos - retainCount;
             newInfos = new TxnInfo[byId.length - removedByIdCount];
-            if (minUndecidedById < 0 && cfk.minUndecidedById >= 0) // must occur later, so deduct all removals
-                minUndecidedById = cfk.minUndecidedById - removedByIdCount;
+            if (minUndecidedById >= 0)
+            {
+                if (minUndecidedById >= pos)
+                    minUndecidedById -= removedByIdCount;
+                else
+                    minUndecidedById = retainCount - minUndecidedByIdDelta;
+            }
             missingBuffers.discardBuffers();
         }
 
         {   // copy to new byTxnId array
             int insertPos = retainCount;
-            int removedExecuteAtPos = removedExecuteAtCount - 1;
+            int removedExecuteAtPos = 0;
             for (int i = pos - 1; i >= 0 ; --i)
             {
                 TxnInfo txn = byId[i];
-                if (txn.status == INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED)
-                    continue;
-
-                if (txn.status == APPLIED && txn.executeAt.compareTo(newPrunedBefore.executeAt) < 0)
+                switch (txn.status)
                 {
-                    TxnId[] missing = txn.missing();
-                    if (missing == NO_TXNIDS)
+                    default: throw new AssertionError("Unhandled status: " + txn.status);
+                    case INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED:
                         continue;
 
-                    if (removedExecuteAtPos >= 0 && removedExecuteAts[removedExecuteAtPos] == txn.executeAt)
-                    {
-                        --removedExecuteAtPos;
-                        continue;
-                    }
+                    case COMMITTED:
+                    case STABLE:
+                    case HISTORICAL:
+                    case TRANSITIVELY_KNOWN:
+                    case PREACCEPTED_OR_ACCEPTED_INVALIDATE:
+                    case ACCEPTED:
+                        break;
+
+                    case APPLIED:
+                        if (txn.executeAt.compareTo(newPrunedBefore.executeAt) < 0)
+                        {
+                            TxnId[] missing = txn.missing();
+                            if (missing == NO_TXNIDS)
+                                continue;
+
+                            if (removedExecuteAtPos < removedExecuteAtCount && removedExecuteAts[removedExecuteAtPos] == txn.executeAt)
+                            {
+                                ++removedExecuteAtPos;
+                                continue;
+                            }
+                        }
                 }
 
                 newInfos[--insertPos] = txn;

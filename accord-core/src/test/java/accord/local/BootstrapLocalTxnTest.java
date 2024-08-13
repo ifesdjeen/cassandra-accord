@@ -61,12 +61,6 @@ class BootstrapLocalTxnTest
         qt().check(rs -> Cluster.run(rs::fork, nodes, t, nodeMap -> new Request()
         {
             @Override
-            public void preProcess(Node on, Node.Id from, ReplyContext replyContext)
-            {
-                // no-op
-            }
-
-            @Override
             public void process(Node on, Node.Id from, ReplyContext replyContext)
             {
                 Gen<Cleanup> cleanupGen = CLEANUP_DISTRIBUTION.next(rs);

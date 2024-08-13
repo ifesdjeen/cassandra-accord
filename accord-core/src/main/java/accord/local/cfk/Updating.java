@@ -32,7 +32,6 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
-import accord.local.SafeCommandStore;
 import accord.local.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.primitives.Ballot;
@@ -51,7 +50,6 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.HISTORICAL;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
-import static accord.local.cfk.CommandsForKey.NO_TXNIDS;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
@@ -66,6 +64,7 @@ import static accord.local.cfk.Utils.validateMissing;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 import static accord.utils.Invariants.Paranoia.NONE;
 import static accord.utils.Invariants.Paranoia.SUPERLINEAR;
@@ -168,7 +167,7 @@ class Updating
         }
 
         cachedTxnIds().forceDiscard(additions, additionCount + prunedIds.length);
-        return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, plainTxnId, curInfo, newInfo));
+        return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, curInfo, newInfo));
     }
 
     static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, CommandsForKey.InternalStatus newStatus, Command command)
@@ -354,7 +353,7 @@ class Updating
         if (testParanoia(SUPERLINEAR, NONE, LOW) && curInfo == null && newInfo.status.compareTo(COMMITTED) < 0)
             validateMissing(newById, NO_TXNIDS, 0, curInfo, newInfo, loadingAsPrunedFor);
 
-        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, plainTxnId, curInfo, newInfo);
+        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, curInfo, newInfo);
     }
 
     /**
@@ -693,17 +692,22 @@ class Updating
         commandStore.execute(context, safeStore -> {
             SafeCommandsForKey safeCommandsForKey = safeStore.get(key);
             CommandsForKey cur = safeCommandsForKey.current();
-            CommandsForKey next = Updating.updateUnmanaged(cur, safeStore, safeStore.unsafeGet(txnId), notifySink);
+            CommandsForKeyUpdate next = Updating.updateUnmanaged(cur, safeStore.unsafeGet(txnId));
             if (cur != next)
-                safeCommandsForKey.set(next);
+            {
+                if (cur != next.cfk())
+                    safeCommandsForKey.set(next.cfk());
+
+                PostProcess postProcess = next.postProcess();
+                if (postProcess != null)
+                    postProcess.postProcess(safeStore, key, notifySink);
+            }
         }).begin(commandStore.agent());
     }
 
-    static CommandsForKey updateUnmanaged(CommandsForKey cfk, SafeCommandStore safeStore, SafeCommand safeCommand, NotifySink notifySink)
+    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand)
     {
-        CommandsForKeyUpdate upd = Updating.updateUnmanaged(cfk, safeStore, safeCommand, notifySink, false, null);
-        Invariants.checkState(upd instanceof CommandsForKey);
-        return (CommandsForKey) upd;
+        return Updating.updateUnmanaged(cfk, safeCommand, false, null);
     }
 
     /**
@@ -712,7 +716,7 @@ class Updating
      *  - {@code !register, update == null}: fails if any dependencies are missing; always returns a CommandsForKey
      *  - {@code !register && update != null}: fails if any dependencies are missing; always returns the original CommandsForKey, and maybe adds a new Unmanaged to {@code update}
      */
-    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommandStore safeStore, SafeCommand safeCommand, NotifySink notifySink, boolean register, @Nullable List<CommandsForKey.Unmanaged> update)
+    static CommandsForKeyUpdate updateUnmanaged(CommandsForKey cfk, SafeCommand safeCommand, boolean register, @Nullable List<CommandsForKey.Unmanaged> update)
     {
         Invariants.checkArgument(!register || update == null);
         if (safeCommand.current().hasBeen(Status.Truncated))
@@ -726,7 +730,10 @@ class Updating
         RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIds(cfk.key());
         TxnId[] missing = NO_TXNIDS;
         int missingCount = 0;
-        int i = txnIds.find(cfk.shardRedundantBefore());
+        // we only populate dependencies to facilitate execution, not for any distributed decision,
+        // so we can filter to only transactions we need to execute locally
+        // TODO (required): what if we set bootstrappedAt after?
+        int i = txnIds.find(cfk.locallyRedundantOrBootstrappedBefore());
         if (i < 0) i = -1 - i;
         if (i < txnIds.size())
         {
@@ -860,12 +867,11 @@ class Updating
                 if (loadPruned == NO_TXNIDS)
                     return result;
 
-                return new CommandsForKeyUpdate.CommandsForKeyUpdateWithNotifier(result, new PostProcess.LoadPruned(null, loadPruned));
+                return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(result, new PostProcess.LoadPruned(null, loadPruned));
             }
         }
 
-        notifySink.notWaiting(safeStore, safeCommand, cfk.key());
-        return cfk;
+        return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(cfk, new PostProcess.NotifyNotWaiting(null, new TxnId[] { safeCommand.txnId() }));
     }
 
     static CommandsForKeyUpdate registerHistorical(CommandsForKey cfk, TxnId txnId)

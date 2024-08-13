@@ -37,8 +37,9 @@ public interface NodeTimeService
     long now();
 
     /**
-     * Return the current time since some arbitrary epoch in the specified time unit. May still be simulated time and not
-     * real time. The time returned by this will be monotonic.
+     * Return the current time since some arbitrary epoch in the specified time unit. May be simulated time and not
+     * real time. This clock should not go backwards, nor should it generally correct for clock skew - it should
+     * only track time elapsed between two points.
      */
     long elapsed(TimeUnit unit);
 
@@ -65,9 +66,6 @@ public interface NodeTimeService
        private long lastNow = Long.MIN_VALUE;
        private long delta = 0;
 
-       // Use an arbitrary epoch
-       private long epoch = Long.MAX_VALUE / 4;
-
        private MonotonicWrapper(LongSupplier nowSupplier)
        {
            this.nowSupplier = nowSupplier;
@@ -83,7 +81,7 @@ public interface NodeTimeService
                delta = lastNow - now;
            lastNow = now;
 
-           return now + delta + epoch;
+           return now + delta;
        }
     };
 }

@@ -197,7 +197,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return safeToRead;
 
             if (bootstrapAt.compareTo(entry.bootstrappedAt) < 0 || (entry.staleUntilAtLeast != null && bootstrapAt.compareTo(entry.staleUntilAtLeast) < 0))
-                return safeToRead.subtract(Ranges.of(entry.range));
+                return safeToRead.without(Ranges.of(entry.range));
 
             return safeToRead;
         }
@@ -208,7 +208,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return executeRanges;
 
             if (txnId.compareTo(entry.bootstrappedAt) < 0 || entry.staleUntilAtLeast != null)
-                return executeRanges.subtract(Ranges.of(entry.range));
+                return executeRanges.without(Ranges.of(entry.range));
 
             return executeRanges;
         }
@@ -219,7 +219,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
                 return notRedundant;
 
             if (txnId.compareTo(entry.shardAppliedOrInvalidatedBefore) < 0)
-                return notRedundant.subtract(Ranges.of(entry.range));
+                return notRedundant.without(Ranges.of(entry.range));
 
             return notRedundant;
         }
@@ -254,6 +254,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Entry>
         public final TxnId locallyRedundantBefore()
         {
             return locallyAppliedOrInvalidatedBefore;
+        }
+
+        public final TxnId locallyRedundantOrBootstrappedBefore()
+        {
+            return TxnId.max(locallyAppliedOrInvalidatedBefore, bootstrappedAt);
         }
 
         // TODO (required, consider): this admits the range of epochs that cross the two timestamps, which matches our
