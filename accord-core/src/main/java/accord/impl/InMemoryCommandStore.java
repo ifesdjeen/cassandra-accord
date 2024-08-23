@@ -86,6 +86,7 @@ import static accord.local.SaveStatus.Erased;
 import static accord.local.SaveStatus.ErasedOrInvalidOrVestigial;
 import static accord.local.SaveStatus.ReadyToExecute;
 import static accord.local.Status.Applied;
+import static accord.local.Status.Invalidated;
 import static accord.local.Status.PreCommitted;
 import static accord.local.Status.Stable;
 import static accord.local.Status.Truncated;
@@ -346,11 +347,13 @@ public abstract class InMemoryCommandStore extends CommandStore
     @Override
     protected void updatedRedundantBefore(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
+        InMemorySafeStore inMemorySafeStore = (InMemorySafeStore) safeStore;
         ranges.forEach(r -> {
             commandsForKey.subMap(r.start(), r.startInclusive(), r.end(), r.endInclusive()).forEach((forKey, forValue) -> {
                 if (!forValue.isEmpty())
                 {
-                    SafeCommandsForKey safeCfk = forValue.createSafeReference();
+                    InMemorySafeCommandsForKey safeCfk = forValue.createSafeReference();
+                    inMemorySafeStore.commandsForKey.put(forKey, safeCfk);
                     safeCfk.refresh(safeStore);
                 }
             });
@@ -390,10 +393,14 @@ public abstract class InMemoryCommandStore extends CommandStore
                 Command command = cmd.value();
                 if (!command.hasBeen(PreCommitted)) return;
                 if (!command.txnId().kind().isGloballyVisible()) return;
+
                 Ranges allRanges = unsafeRangesForEpoch().allBetween(id.epoch(), command.executeAtOrTxnId().epoch());
                 boolean done = command.hasBeen(Truncated);
                 if (!done)
                 {
+                    if (redundantBefore().status(cmd.txnId, command.executeAtOrTxnId(), command.route()) == RedundantStatus.PRE_BOOTSTRAP_OR_STALE)
+                        return;
+
                     Route<?> route = cmd.value().route().slice(allRanges);
                     done = !route.isEmpty() && ranges.containsAll(route);
                 }

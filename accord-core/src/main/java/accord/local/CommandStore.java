@@ -153,14 +153,12 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): schedule regular pruning of these collections
     // bootstrapBeganAt and shardDurableAt are both canonical data sets mostly used for debugging / constructing
     private NavigableMap<TxnId, Ranges> bootstrapBeganAt = ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
-    // TODO (required): updates to these variables should be buffered like with Command updates in SafeCommandStore, to be rolled-back in event of a failure processing the command.
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     // TODO (expected): store this only once per node
     private DurableBefore durableBefore = DurableBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
     protected RangesForEpoch rangesForEpoch;
 
-    // TODO (desired): merge with redundantBefore?
     /**
      * safeToRead is related to RedundantBefore, but a distinct concept.
      * While bootstrappedAt defines the txnId bounds we expect to maintain data for locally,
@@ -174,10 +172,11 @@ public abstract class CommandStore implements AgentExecutor
      * We also update safeToRead when we go stale, to remove ranges we may have bootstrapped but that are now known to
      * be incomplete. In this case we permit transactions to execute in any order for the unsafe key ranges.
      * But they may still be ordered for other key ranges they participate in.
+     *
+     * TODO (expected): merge with redundantBefore
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
-    // TODO (required): we must synchronise this on joining, prior to marking ourselves ready to coordinate
     @Nullable private ReducingRangeMap<Timestamp> rejectBefore;
 
     protected CommandStore(int id, NodeTimeService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)

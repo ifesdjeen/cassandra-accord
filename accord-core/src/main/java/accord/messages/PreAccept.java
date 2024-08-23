@@ -31,6 +31,7 @@ import accord.local.*;
 import accord.messages.TxnRequest.WithUnsynced;
 import accord.topology.Shard;
 import accord.topology.Topologies;
+import accord.utils.Invariants;
 
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 
@@ -114,22 +115,29 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
             return applyIfDoesNotCoordinate(safeStore);
 
         SafeCommand safeCommand = safeStore.get(txnId, this, route);
-        switch (Commands.preaccept(safeStore, safeCommand, txnId, maxEpoch, partialTxn, route))
+        Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, txnId, maxEpoch, partialTxn, route);
+        Command command = safeCommand.current();
+        switch (outcome)
         {
             default:
-            case Success:
                 // we might hit 'Redundant' if we have to contact later epochs and partially re-contact a node we already contacted
-                // TODO (expected): consider dedicated special case, or rename
+                // TODO (desired): consider dedicated special case, or rename
+                // TODO (desired): consider special-casing where status >= ACCEPTED
             case Redundant:
-                Command command = safeCommand.current();
-                // for efficiency, we don't usually return dependencies newer than txnId as they aren't necessarily needed
-                // for recovery, and it's better to persist less data than more. However, for exclusive sync points we
-                // don't need to perform an Accept round, nor do we need to persist this state to aid recovery. We just
-                // want the issuer of the sync point to know which transactions to wait for before it can safely treat
-                // all transactions with lower txnId as expired.
+                if (command.saveStatus().compareTo(SaveStatus.PreAccepted) > 0)
+                    return PreAcceptNack.INSTANCE;
+
+            case Success:
                 Ranges ranges = safeStore.ranges().allBetween(minEpoch, txnId);
-                return new PreAcceptOk(txnId, command.executeAt(),
-                                       calculatePartialDeps(safeStore, txnId, command.partialTxn().keys(), scope, EpochSupplier.constant(minEpoch), txnId, ranges));
+                Timestamp executeAt = command.executeAt();
+                PartialDeps deps = calculatePartialDeps(safeStore, txnId, command.partialTxn().keys(), scope, EpochSupplier.constant(minEpoch), txnId, ranges);
+                // we can have future transaction dependencies if we are responding with an earlier witnessed executeAt, and in this case
+                // we may still execute on the fast path, so we need to include the future dependency (which is included by CFK only if it has pruned earlier transactions)
+                // for execution on any replica these dependencies may be committed to.
+                // TODO (desired): if we proceed to propose phase we could choose to filter these future dependencies, as any necessary will be re-included by the Accept responses
+                Invariants.checkState(txnId.kind().isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
+                                      "Calculated dependencies for %s containing a txnId %s greater than the decided executeAt %s: %s", txnId, deps.maxTxnId(), executeAt, deps);
+                return new PreAcceptOk(txnId, command.executeAt(), deps);
 
             case Truncated:
             case RejectedBallot:

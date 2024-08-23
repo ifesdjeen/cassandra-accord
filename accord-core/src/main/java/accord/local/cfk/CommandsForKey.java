@@ -31,7 +31,6 @@ import accord.api.Key;
 import accord.api.VisibleForImplementation;
 import accord.impl.CommandsSummary;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -41,6 +40,8 @@ import accord.local.SafeCommandStore.TestStartedAt;
 import accord.local.SafeCommandStore.TestStatus;
 import accord.local.SaveStatus;
 import accord.local.Status;
+import accord.local.cfk.PostProcess.NotifyUnmanagedResult;
+import accord.local.cfk.Pruning.LoadingPruned;
 import accord.primitives.Ballot;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind;
@@ -49,6 +50,7 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
+import accord.utils.btree.BulkIterator;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
@@ -60,6 +62,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.HISTORICAL;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
+import static accord.local.cfk.PostProcess.notifyPreBootstrap;
 import static accord.local.cfk.Pruning.isWaitingOnPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.Updating.insertOrUpdate;
@@ -78,11 +81,28 @@ import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.isParanoid;
 import static accord.utils.Invariants.testParanoia;
 import static accord.utils.SortedArrays.Search.FAST;
+import static accord.utils.btree.BTree.Dir.ASC;
+import static accord.utils.btree.UpdateFunction.noOp;
 
 /**
+ * REMEMBER AT ALL TIMES WHEN MODIFYING.
+ * This class does THREE things:
+ *  - Calculates execution dependencies. For this we must witness all transactions that may execute before
+ *    (at least via some transitive relation). We cannot remove transactions we have executed locally unless
+ *    they are represented by some other transaction we return (such as an exclusive sync point or a later
+ *    transaction that has it durably as a dependency).
+ *  - Computes recovery decisions.
+ *      - This missing collection is involved here, to decide if the transaction we are recovering
+ *        has been witnessed and therefore may have taken the fast path.
+ *  - Ensures transactions execute locally in the correct order.
+ *      - The missing collection is involved in this, but can ignore any transactions that are pre-bootstrap.
+ *
+ *  Each of these features has different constraints and requirements. Because a change satisfies one or two of the three
+ *  does not mean it is safe!
+ *
  * <h2>Introduction</h2>
  * A specialised collection for efficiently representing and querying everything we need for making coordination
- * and recovery decisions about a key's command conflicts.
+ * and recovery decisions about a key's command conflicts, and for managing execution order.
  *
  * Every command we know about that is not shard-redundant is listed in the {@code byId} collection, which is sorted by {@code TxnId}.
  * This includes all transitive dependencies we have witnessed via other transactions, but not witnessed directly.
@@ -115,9 +135,10 @@ import static accord.utils.SortedArrays.Search.FAST;
  * <h2>Garbage Collection</h2>
  * This collection is trimmed by two mechanisms: pruning applied transactions and removing redundant transactions.
  *
- * 1) redundantBefore represents the global lower bound covering the key for transactions all being applied or invalidated,
- * so we know that nothing with a lower TxnId should ever need to be computed, taken as a dependency or recovered. So
- * we may simply erase these.
+ * 1) redundantBefore represents the local lower bound covering the key for transactions having all been applied or
+ * invalidated. This is not the global lower bound, but we know that anything with a lower TxnId is either committed
+ * locally and we will report this decision to any distributed recovery OR it will not execute and so we may safely
+ * report that it is unknown to us in this collection. So we may simply erase these.
  *
  * 2) prunedBefore represents a local bound that permits us to optimistically remove data from the CommandsForKey
  * that may need to be loaded again later. Specifically, we pick an applied {@code TxnId} that we will retain, and we
@@ -156,25 +177,21 @@ import static accord.utils.SortedArrays.Search.FAST;
  * this replica's collection to decipher any fast path decision. Any other replica must either do the same, or else
  * will correctly record this transaction as present in any relevant deps of later transactions.
  *
- * TODO (expected): maintain separate redundantBefore and closedBefore timestamps, latter implied by any exclusivesyncpoint;
- *                  advance former based on Applied status of all TxnId before the latter
  * TODO (desired):  track whether a TxnId is a write on this key only for execution (rather than globally)
  * TODO (expected): merge with TimestampsForKey
  * TODO (desired):  save space by encoding InternalStatus in TxnId.flags(), so that when executeAt==txnId we can save 8 bytes per entry
  * TODO (expected): remove a command that is committed to not intersect with the key for this store (i.e. if accepted in a later epoch than committed on, so ownership changes)
  * TODO (expected): avoid updating transactions we don't manage the execution of - perhaps have a dedicated InternalStatus
  * TODO (expected): minimise repeated notification, either by logic or marking a command as notified once ready-to-execute
- * TODO (required): linearizability violation detection
+ * TODO (required): better linearizability violation detection
  * TODO (expected): cleanup unmanaged transitively known transactions
  * TODO (desired): introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
- * TODO (expected): use locallyAppliedOrInvalidatedBefore to advance minUndecided and as a lower bound for triggering execution
  * TODO (desired): store missing transactions against the highest known transaction only (this should also permit us to prune better by ignoring the missing collection contents)
  */
 public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSummary
 {
     private static final boolean ELIDE_TRANSITIVE_DEPENDENCIES = true;
 
-    public static final RedundantBefore.Entry NO_REDUNDANT_BEFORE = new RedundantBefore.Entry(null, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, null);
     public static final TxnInfo NO_INFO = new TxnInfo(TxnId.NONE, HISTORICAL, TxnId.NONE);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
     public static final Unmanaged[] NO_PENDING_UNMANAGED = new Unmanaged[0];
@@ -226,9 +243,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     public static class SerializerSupport
     {
-        public static CommandsForKey create(Key key, TxnInfo[] txns, Unmanaged[] unmanageds, TxnId prunedBefore)
+        public static CommandsForKey create(Key key, TxnInfo[] txns, Unmanaged[] unmanageds, TxnId redundantBefore, TxnId prunedBefore)
         {
-            return new CommandsForKey(key, NO_REDUNDANT_BEFORE, prunedBefore, Pruning.LoadingPruned.empty(), txns, unmanageds);
+            return reconstruct(key, redundantBefore, txns, prunedBefore, unmanageds);
         }
     }
 
@@ -612,72 +629,40 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     }
 
     final Key key;
-    final RedundantBefore.Entry redundantBefore;
-    final TxnInfo prunedBefore;
-    // a btree keyed by TxnId we have encountered since pruning that occur before prunedBefore;
-    // mapping to those TxnId that had witnessed this potentially-pruned TxnId.
-    final Object[] loadingPruned;
+    final TxnId redundantBefore;
+    final @Nullable TxnId bootstrappedAt;
+
     // all transactions, sorted by TxnId
     final TxnInfo[] byId;
+    final int minUndecidedById;
+
     // reads and writes ONLY that are committed or stable or applied, keyed by executeAt
     // TODO (required): validate that it is always a prefix that is Applied (i.e. never a gap)
     // TODO (desired): filter transactions whose execution we don't manage
     final TxnInfo[] committedByExecuteAt;
-    final int minUndecidedById, maxAppliedWriteByExecuteAt;
+    final int maxAppliedWriteByExecuteAt; // applied OR prebootstrap
+
+    // a btree keyed by TxnId we have encountered since pruning that occur before prunedBefore;
+    // mapping to those TxnId that had witnessed this potentially-pruned TxnId.
+    final Object[] loadingPruned;
+    final int prunedBeforeById;
+    final TxnId safelyPrunedBefore;
+
     final Unmanaged[] unmanageds;
 
-    CommandsForKey(Key key, RedundantBefore.Entry redundantBefore, TxnInfo prunedBefore, Object[] loadingPruned, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, Unmanaged[] unmanageds)
+    CommandsForKey(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, Object[] loadingPruned, int prunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
     {
         this.key = key;
-        this.redundantBefore = Invariants.nonNull(redundantBefore);
-        this.prunedBefore = Invariants.nonNull(prunedBefore);
-        this.loadingPruned = loadingPruned;
+        this.redundantBefore = redundantBefore;
+        this.bootstrappedAt = bootstrappedAt;
         this.byId = byId;
         this.committedByExecuteAt = committedByExecuteAt;
         this.minUndecidedById = minUndecidedById;
         this.maxAppliedWriteByExecuteAt = maxAppliedWriteByExecuteAt;
-        this.unmanageds = unmanageds;
-        checkIntegrity();
-    }
-
-    CommandsForKey(Key key, RedundantBefore.Entry redundantBefore, TxnId prunedBefore, Object[] loadingPruned, TxnInfo[] byId, Unmanaged[] unmanageds)
-    {
-        this.key = key;
-        this.redundantBefore = Invariants.nonNull(redundantBefore);
-        this.prunedBefore = redundantBefore.shardRedundantBefore().compareTo(prunedBefore) >= 0
-                            ? NO_INFO : prunedBefore.equals(TxnId.NONE)
-                                        ? NO_INFO : Invariants.nonNull(get(prunedBefore, byId));
         this.loadingPruned = loadingPruned;
-        this.byId = byId;
+        this.prunedBeforeById = prunedBeforeById;
+        this.safelyPrunedBefore = safelyPrunedBefore;
         this.unmanageds = unmanageds;
-
-        int countCommitted = 0;
-        int minUndecided = -1;
-        for (int i = 0; i < byId.length ; ++i)
-        {
-            TxnInfo txn = byId[i];
-            if (txn.status == INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED) continue;
-            if (txn.status.compareTo(COMMITTED) >= 0) ++countCommitted;
-            else if (minUndecided == -1 && managesExecution(txn)) minUndecided = i;
-        }
-        this.minUndecidedById = minUndecided;
-        this.committedByExecuteAt = new TxnInfo[countCommitted];
-        countCommitted = 0;
-        for (TxnInfo txn : byId)
-        {
-            if (txn.status.compareTo(COMMITTED) >= 0 && txn.status != INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED)
-                committedByExecuteAt[countCommitted++] = txn;
-        }
-        Arrays.sort(committedByExecuteAt, TxnInfo::compareExecuteAt);
-        int maxAppliedByExecuteAt = committedByExecuteAt.length;
-        while (--maxAppliedByExecuteAt >= 0)
-        {
-            TxnInfo txn = committedByExecuteAt[maxAppliedByExecuteAt];
-            if (txn.status == APPLIED && txn.kind() == Write)
-                break;
-        }
-        this.maxAppliedWriteByExecuteAt = maxAppliedByExecuteAt;
-
         checkIntegrity();
     }
 
@@ -685,26 +670,29 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         this.key = copy.key;
         this.redundantBefore = copy.redundantBefore;
-        this.prunedBefore = copy.prunedBefore;
-        this.loadingPruned = loadingPruned;
+        this.bootstrappedAt = copy.bootstrappedAt;
         this.byId = copy.byId;
         this.committedByExecuteAt = copy.committedByExecuteAt;
         this.minUndecidedById = copy.minUndecidedById;
         this.maxAppliedWriteByExecuteAt = copy.maxAppliedWriteByExecuteAt;
+        this.loadingPruned = loadingPruned;
+        this.prunedBeforeById = copy.prunedBeforeById;
+        this.safelyPrunedBefore = copy.safelyPrunedBefore;
         this.unmanageds = unmanageds;
-
         checkIntegrity();
     }
 
     public CommandsForKey(Key key)
     {
         this.key = key;
-        this.redundantBefore = NO_REDUNDANT_BEFORE;
-        this.prunedBefore = NO_INFO;
-        this.loadingPruned = Pruning.LoadingPruned.empty();
+        this.redundantBefore = TxnId.NONE;
+        this.bootstrappedAt = null;
         this.byId = NO_INFOS;
         this.committedByExecuteAt = NO_INFOS;
         this.minUndecidedById = this.maxAppliedWriteByExecuteAt = -1;
+        this.loadingPruned = LoadingPruned.empty();
+        this.prunedBeforeById = -1;
+        this.safelyPrunedBefore = TxnId.NONE;
         this.unmanageds = NO_PENDING_UNMANAGED;
     }
 
@@ -768,24 +756,39 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return i < 0 ? null : txns[i];
     }
 
-    public RedundantBefore.Entry redundantBefore()
+    public TxnInfo prunedBefore()
+    {
+        return prunedBeforeById < 0 ? NO_INFO : byId[prunedBeforeById];
+    }
+
+    public TxnId redundantOrBootstrappedBefore()
+    {
+        return TxnId.nonNullOrMax(redundantBefore, bootstrappedAt);
+    }
+
+    public TxnId redundantBefore()
     {
         return redundantBefore;
     }
 
-    public TxnId prunedBefore()
+    public boolean isPostBootstrap(TxnId txnId)
     {
-        return prunedBefore;
+        return isPostBootstrap(txnId, bootstrappedAt);
     }
 
-    public TxnId locallyRedundantOrBootstrappedBefore()
+    private static boolean isPostBootstrap(TxnId txnId, TxnId bootstrappedAt)
     {
-        return redundantBefore.locallyRedundantOrBootstrappedBefore();
+        return bootstrappedAt == null || txnId.compareTo(bootstrappedAt) >= 0;
     }
 
-    public TxnId shardRedundantBefore()
+    public boolean isPreBootstrap(TxnId txnId)
     {
-        return redundantBefore.shardRedundantBefore();
+        return bootstrappedAt != null && txnId.compareTo(bootstrappedAt) < 0;
+    }
+
+    private static boolean isPreBootstrap(TxnId txnId, TxnId bootstrappedAt)
+    {
+        return bootstrappedAt != null && txnId.compareTo(bootstrappedAt) < 0;
     }
 
     private TxnId nextWaitingToApply(Kinds kinds, @Nullable Timestamp untilExecuteAt)
@@ -832,6 +835,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         int start, end, loadingIndex = 0;
         // if this is null the TxnId is known in byId
         // otherwise, it must be non-null and represents the transactions (if any) that have requested it be loaded due to being pruned
+        TxnId prunedBefore = prunedBefore();
         TxnId[] loadingFor = null;
         {
             int insertPos = Arrays.binarySearch(byId, testTxnId);
@@ -927,6 +931,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                                      Kinds testKind,
                                      CommandFunction<P1, T, T> map, P1 p1, T initialValue)
     {
+        TxnId prunedBefore = prunedBefore();
         int end = insertPos(startedBefore);
         Timestamp maxCommittedWriteBefore;
         {
@@ -1010,7 +1015,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         TxnId txnId = next.txnId();
         Invariants.checkArgument(wasPruned || manages(txnId));
 
-        if (txnId.compareTo(redundantBefore.shardRedundantBefore()) < 0)
+        if (txnId.compareTo(redundantBefore) < 0)
             return this;
 
         TxnId[] loadingAsPrunedFor = loadingPrunedFor(loadingPruned, txnId, null); // we default to null to distinguish between no match, and a match with NO_TXNIDS
@@ -1082,20 +1087,78 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     // TODO (required): additional linearizability violation detection, based on expectation of presence in missing set
 
-    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, Object[] newLoadingPruned, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
+    CommandsForKeyUpdate update(TxnInfo[] newById, int newMinUndecidedById, TxnInfo[] newCommittedByExecuteAt, int newMaxAppliedWriteByExecuteAt, Object[] newLoadingPruned, int newPrunedBeforeById, @Nullable TxnInfo curInfo, @Nonnull TxnInfo newInfo)
     {
-        return new CommandsForKey(key, redundantBefore, prunedBefore, newLoadingPruned, newById, newCommittedByExecuteAt, newMinUndecidedById, newMaxAppliedWriteByExecuteAt, unmanageds)
-               .notifyUnmanaged(curInfo, newInfo);
+        Invariants.checkState(prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[prunedBeforeById]));
+        return updateAndNotifyUnmanageds(key, redundantBefore, bootstrappedAt,
+                                         newById, newCommittedByExecuteAt, newMinUndecidedById, newMaxAppliedWriteByExecuteAt,
+                                         newLoadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds, curInfo, newInfo);
+    }
+
+    static CommandsForKey reconstruct(Key key, TxnId redundantBefore, TxnInfo[] byId, TxnId prunedBefore, Unmanaged[] unmanageds)
+    {
+        int prunedBeforeById = Arrays.binarySearch(byId, prunedBefore);
+        Invariants.checkState(prunedBeforeById >= 0);
+        return reconstruct(key, redundantBefore, TxnId.NONE, byId, BTree.empty(), prunedBeforeById, TxnId.NONE, unmanageds);
+    }
+
+    static CommandsForKey reconstruct(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
+    {
+        CommandsForKeyUpdate update = reconstructAndUpdateUnmanaged(key, redundantBefore, bootstrappedAt, byId, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds);
+        Invariants.checkState(update.getClass() == CommandsForKey.class);
+        return update.cfk();
+    }
+
+    static CommandsForKeyUpdate reconstructAndUpdateUnmanaged(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
+    {
+        int countCommitted = 0;
+        int minUndecidedById = -1;
+        for (int i = 0; i < byId.length ; ++i)
+        {
+            TxnInfo txn = byId[i];
+            if (txn.status == INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED) continue;
+            if (txn.status.compareTo(COMMITTED) >= 0) ++countCommitted;
+            else if (minUndecidedById == -1 && managesExecution(txn) && isPostBootstrap(txn, bootstrappedAt))
+                minUndecidedById = i;
+        }
+        TxnInfo[] committedByExecuteAt = new TxnInfo[countCommitted];
+        countCommitted = 0;
+        for (TxnInfo txn : byId)
+        {
+            if (txn.status.compareTo(COMMITTED) >= 0 && txn.status != INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED)
+                committedByExecuteAt[countCommitted++] = txn;
+        }
+        Arrays.sort(committedByExecuteAt, TxnInfo::compareExecuteAt);
+        int maxAppliedWriteByExecuteAt = committedByExecuteAt.length;
+        while (--maxAppliedWriteByExecuteAt >= 0)
+        {
+            TxnInfo txn = committedByExecuteAt[maxAppliedWriteByExecuteAt];
+            if (txn.kind() == Write && (txn.status == APPLIED || isPreBootstrap(txn, bootstrappedAt)))
+                break;
+        }
+
+        return updateAndNotifyUnmanageds(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds, null, null);
+    }
+
+    static CommandsForKeyUpdate updateAndNotifyUnmanageds(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds, @Nullable TxnInfo curInfo, @Nullable TxnInfo newInfo)
+    {
+        NotifyUnmanagedResult notifyUnmanaged = PostProcess.notifyUnmanaged(unmanageds, byId, minUndecidedById, committedByExecuteAt, maxAppliedWriteByExecuteAt, loadingPruned, redundantBefore, bootstrappedAt, curInfo, newInfo);
+        if (notifyUnmanaged != null)
+            unmanageds = notifyUnmanaged.newUnmanaged;
+        CommandsForKey result = new CommandsForKey(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds);
+        if (notifyUnmanaged == null)
+            return result;
+        return new CommandsForKeyUpdateWithPostProcess(result, notifyUnmanaged.postProcess);
     }
 
     CommandsForKey update(Unmanaged[] newUnmanageds)
     {
-        return new CommandsForKey(key, redundantBefore, prunedBefore, loadingPruned, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, newUnmanageds);
+        return new CommandsForKey(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, loadingPruned, prunedBeforeById, safelyPrunedBefore, newUnmanageds);
     }
 
     CommandsForKey update(Object[] newLoadingPruned)
     {
-        return new CommandsForKey(key, redundantBefore, prunedBefore, newLoadingPruned, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, unmanageds);
+        return new CommandsForKey(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, safelyPrunedBefore, unmanageds);
     }
 
     CommandsForKeyUpdate registerUnmanaged(SafeCommand safeCommand)
@@ -1103,15 +1166,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return Updating.updateUnmanaged(this, safeCommand, true, null);
     }
 
-    private CommandsForKeyUpdate notifyUnmanaged(@Nullable TxnInfo curInfo, TxnInfo newInfo)
-    {
-        return PostProcess.notifyUnmanaged(this, curInfo, newInfo);
-    }
-
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command command, NotifySink notifySink)
     {
         TxnInfo minUndecided = minUndecided();
-        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()) && redundantBefore.endEpoch > minUndecided.epoch())
+        if (minUndecided != null && !minUndecided.equals(prevCfk.minUndecided()))
             notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
 
         if (command == null || !command.hasBeen(Status.Committed) || !managesExecution(command.txnId()))
@@ -1134,6 +1192,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         TxnId updatedTxnId = command.txnId();
         TxnInfo newInfo = get(updatedTxnId);
         InternalStatus newStatus = newInfo.status;
+        if (newStatus == STABLE && isPreBootstrap(updatedTxnId))
+        {
+            notifySink.notWaiting(safeStore, updatedTxnId, key);
+            return;
+        }
 
         TxnInfo prevInfo = prevCfk.get(updatedTxnId);
         InternalStatus prevStatus = prevInfo == null ? TRANSITIVELY_KNOWN : prevInfo.status;
@@ -1199,7 +1262,9 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         int undecidedIndex = minUndecidedById < 0 ? byId.length : minUndecidedById;
         long unappliedCounters = 0L;
-        TxnInfo minUndecided = minUndecided();
+        TxnId minUndecided = minUndecided();
+        if (minUndecided == null)
+            minUndecided = bootstrappedAt; // we don't count txns before this as waiting to execute
 
         for (int i = maxAppliedWriteByExecuteAt + 1; i < mayExecuteToIndex ; ++i)
         {
@@ -1315,30 +1380,60 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     }
 
-    public CommandsForKey withRedundantBeforeAtLeast(RedundantBefore.Entry newRedundantBefore)
+    public CommandsForKeyUpdate withRedundantBeforeAtLeast(RedundantBefore.Entry newRedundantBeforeEntry)
     {
-        Invariants.checkArgument(newRedundantBefore.shardRedundantBefore().compareTo(shardRedundantBefore()) >= 0, "Expect new RedundantBefore.Entry shardAppliedOrInvalidatedBefore to be ahead of existing one");
-
-        if (newRedundantBefore.equals(redundantBefore))
+        /*
+         * We cannot use locallyDecidedAndAppliedOrInvalidatedBefore to GC because until it has been applied everywhere
+         * it cannot safely e substituted for earlier transactions as a dependency.
+         *
+         * However, it can be safely used as a prune lower bound that we know we do not need to go to disk to load.
+         */
+        TxnId newRedundantBefore = newRedundantBeforeEntry.shardAppliedOrInvalidatedBefore;
+        TxnId newBootstrappedAt = newRedundantBeforeEntry.bootstrappedAt;
+        if (newBootstrappedAt.compareTo(newRedundantBefore) <= 0) newBootstrappedAt = null;
+        if (newRedundantBefore.equals(redundantBefore) && Objects.equals(newBootstrappedAt, bootstrappedAt))
             return this;
 
-        TxnInfo[] newInfos = byId;
-        int pos = insertPos(newRedundantBefore.shardRedundantBefore());
+        Invariants.checkArgument(newRedundantBefore.compareTo(redundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
+        Invariants.checkArgument(bootstrappedAt == null || newRedundantBefore.compareTo(bootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(bootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
+
+        TxnInfo[] newById = byId;
+        int pos = insertPos(newRedundantBefore);
         if (pos != 0)
         {
-            newInfos = Arrays.copyOfRange(byId, pos, byId.length);
-            for (int i = 0 ; i < newInfos.length ; ++i)
+            if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
             {
-                TxnInfo txn = newInfos[i];
+                int startPos = bootstrappedAt == null ? 0 : insertPos(bootstrappedAt);
+                for (int i = startPos ; i < pos ; ++i)
+                    Invariants.checkState(byId[i].status != COMMITTED, "%s expected to be applied or undecided, as marked redundant", byId[i]);
+            }
+
+            newById = Arrays.copyOfRange(byId, pos, byId.length);
+            for (int i = 0 ; i < newById.length ; ++i)
+            {
+                TxnInfo txn = newById[i];
                 TxnId[] missing = txn.missing();
                 if (missing == NO_TXNIDS) continue;
-                missing = removeRedundantMissing(missing, newRedundantBefore.shardRedundantBefore());
-                newInfos[i] = txn.update(missing);
+                missing = removeRedundantMissing(missing, newRedundantBefore);
+                newById[i] = txn.update(missing);
             }
         }
 
-        // TODO (expected): filter pending unmanageds
-        return new CommandsForKey(key, newRedundantBefore, prunedBefore, loadingPruned, newInfos, unmanageds);
+        int newPrunedBeforeById;
+        if (prunedBefore().compareTo(newRedundantBefore) <= 0) newPrunedBeforeById = -1;
+        else newPrunedBeforeById = Arrays.binarySearch(newById, prunedBefore());
+
+        Object[] newLoadingPruned = loadingPruned;
+        int newLoadingPrunedLowBound = BTree.findIndex(loadingPruned, TxnId::compareTo, newRedundantBefore);
+        if (newLoadingPrunedLowBound < 0) newLoadingPrunedLowBound = -1 - newLoadingPrunedLowBound;
+        if (newLoadingPrunedLowBound > 0)
+        {
+            int size = BTree.size(loadingPruned);
+            newLoadingPruned = BTree.build(BulkIterator.of(BTree.iterator(loadingPruned, newLoadingPrunedLowBound, size, ASC)), size - newLoadingPrunedLowBound, noOp());
+        }
+
+        CommandsForKeyUpdate result = reconstructAndUpdateUnmanaged(key, newRedundantBefore, newBootstrappedAt, newById, newLoadingPruned, newPrunedBeforeById, newRedundantBeforeEntry.locallyDecidedAndAppliedOrInvalidatedBefore, unmanageds);
+        return notifyPreBootstrap(result);
     }
 
     /**
@@ -1407,22 +1502,22 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return minUndecidedById < 0 ? null : byId[minUndecidedById].plainTxnId();
     }
 
-    int maxContiguousManagedAppliedIndex()
+    static int maxContiguousManagedAppliedIndex(TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, TxnId bootstrappedAt)
     {
         int i = maxAppliedWriteByExecuteAt + 1;
         while (i < committedByExecuteAt.length)
         {
             TxnInfo txn = committedByExecuteAt[i];
-            if (txn.status != APPLIED && managesExecution(txn))
+            if (txn.status != APPLIED && managesExecution(txn) && (bootstrappedAt == null || bootstrappedAt.compareTo(txn) <= 0))
                 break;
             ++i;
         }
         return i - 1;
     }
 
-    TxnInfo maxContiguousManagedApplied()
+    static TxnInfo maxContiguousManagedApplied(TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, TxnId bootstrappedAt)
     {
-        int i = maxContiguousManagedAppliedIndex();
+        int i = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
         return i < 0 ? null : committedByExecuteAt[i];
     }
 
@@ -1430,13 +1525,15 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         if (isParanoid())
         {
-            Invariants.checkState(byId.length == 0 || byId[0].compareTo(shardRedundantBefore()) >= 0);
-            Invariants.checkState(prunedBefore == NO_INFO || (prunedBefore.status == APPLIED && prunedBefore.kind().isWrite()));
-            Invariants.checkState(minUndecidedById < 0 || byId[minUndecidedById].status.compareTo(COMMITTED) < 0 && managesExecution(byId[minUndecidedById]));
+            Invariants.checkState(byId.length == 0 || byId[0].compareTo(redundantBefore()) >= 0);
+            Invariants.checkState(prunedBeforeById == -1 || (prunedBefore().status == APPLIED && prunedBefore().kind().isWrite()));
+            Invariants.checkState(minUndecidedById < 0 || (byId[minUndecidedById].status.compareTo(COMMITTED) < 0
+                                                           && managesExecution(byId[minUndecidedById]) && isPostBootstrap(byId[minUndecidedById])));
+
             if (maxAppliedWriteByExecuteAt >= 0)
             {
                 Invariants.checkState(committedByExecuteAt[maxAppliedWriteByExecuteAt].kind() == Write);
-                Invariants.checkState(committedByExecuteAt[maxAppliedWriteByExecuteAt].status == APPLIED);
+                Invariants.checkState(committedByExecuteAt[maxAppliedWriteByExecuteAt].status == APPLIED || isPreBootstrap(committedByExecuteAt[maxAppliedWriteByExecuteAt]));
             }
 
             if (testParanoia(LINEAR, NONE, LOW))
@@ -1444,8 +1541,8 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 Invariants.checkArgument(SortedArrays.isSortedUnique(byId));
                 Invariants.checkArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
 
-                if (minUndecidedById >= 0) for (int i = 0 ; i < minUndecidedById ; ++i) Invariants.checkState(byId[i].status.compareTo(COMMITTED) >= 0 || !managesExecution(byId[i]));
-                else for (TxnInfo txn : byId) Invariants.checkState(txn.status.compareTo(COMMITTED) >= 0 || !managesExecution(txn));
+                if (minUndecidedById >= 0) for (int i = 0 ; i < minUndecidedById ; ++i) Invariants.checkState(byId[i].status.compareTo(COMMITTED) >= 0 || !managesExecution(byId[i]) || isPreBootstrap(byId[i]));
+                else for (TxnInfo txn : byId) Invariants.checkState(txn.status.compareTo(COMMITTED) >= 0 || !managesExecution(txn) || isPreBootstrap(txn));
 
                 if (maxAppliedWriteByExecuteAt >= 0)
                 {
@@ -1457,6 +1554,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                     for (TxnInfo txn : committedByExecuteAt)
                         Invariants.checkState(txn.kind() != Kind.Write || txn.status.compareTo(APPLIED) < 0);
                 }
+                Invariants.checkState(BTree.size(loadingPruned) == 0 || redundantBefore.compareTo(BTree.findByIndex(loadingPruned, 0)) <= 0);
             }
             if (testParanoia(SUPERLINEAR, NONE, LOW))
             {
@@ -1476,9 +1574,37 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                     if (txn.status.isCommitted())
                         Invariants.checkState(txn == committedByExecuteAt[Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, txn, TxnInfo::compareExecuteAt)]);
                 }
-                for (Pruning.LoadingPruned txn : BTree.<Pruning.LoadingPruned>iterable(loadingPruned))
+                for (LoadingPruned txn : BTree.<LoadingPruned>iterable(loadingPruned))
                 {
                     Invariants.checkState(indexOf(txn) < 0);
+                }
+                int decidedBefore = minUndecidedById < 0 ? byId.length : minUndecidedById;
+                if (!BTree.isEmpty(loadingPruned))
+                {
+                    decidedBefore = Arrays.binarySearch(byId, BTree.findByIndex(loadingPruned, 0));
+                    if (decidedBefore < 0)
+                        decidedBefore = -2 - decidedBefore;
+                }
+                int appliedBefore = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                for (Unmanaged unmanaged : unmanageds)
+                {
+                    switch (unmanaged.pending)
+                    {
+                        case COMMIT:
+                        {
+                            int byIdIndex = Arrays.binarySearch(byId, unmanaged.waitingUntil);
+                            if (byIdIndex < 0)
+                                byIdIndex = -1 - byIdIndex;
+                            Invariants.checkState(byIdIndex >= decidedBefore);
+                            break;
+                        }
+                        case APPLY:
+                        {
+                            int byExecuteAtIndex = SortedArrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, unmanaged.waitingUntil, (f, i) -> f.compareTo(i.executeAt), FAST);
+                            Invariants.checkState(byExecuteAtIndex >= 0 && byExecuteAtIndex >= appliedBefore);
+                            break;
+                        }
+                    }
                 }
             }
         }

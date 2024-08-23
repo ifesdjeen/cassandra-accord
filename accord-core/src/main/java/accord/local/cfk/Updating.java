@@ -140,14 +140,14 @@ class Updating
             for (int i = 0 ; i < additionsBeforeOldUndecided ; ++i)
             {
                 TxnId addition = additions[i];
-                if (!managesExecution(addition))
+                if (!managesExecution(addition) || cfk.isPreBootstrap(addition))
                     continue;
 
                 newMinUndecided = addition;
                 break;
             }
 
-            if ((newMinUndecided == null || newMinUndecided.compareTo(newInfo) > 0) && newInfo.status.compareTo(COMMITTED) < 0 && managesExecution(newInfo))
+            if ((newMinUndecided == null || newMinUndecided.compareTo(newInfo) > 0) && newInfo.status.compareTo(COMMITTED) < 0 && managesExecution(newInfo) && !cfk.isPreBootstrap(newInfo))
                 newMinUndecided = newInfo;
 
             if (newMinUndecided != null && curMinUndecided != null && curMinUndecided.compareTo(newMinUndecided) < 0)
@@ -157,17 +157,22 @@ class Updating
                 ++additionsBeforeOldUndecided;
 
             if (newMinUndecided == null && curMinUndecided == curInfo)
-                newMinUndecidedById = nextUndecided(newById, insertPos + 1);
+                newMinUndecidedById = nextUndecided(newById, insertPos + 1, cfk);
             else if (newMinUndecided == null && newMinUndecidedById >= 0)
                 newMinUndecidedById += additionsBeforeOldUndecided;
             else if (newMinUndecided == newInfo)
-                newMinUndecidedById = insertPos + -1 - Arrays.binarySearch(additions, 0, additionCount, newInfo);
+                newMinUndecidedById = insertPos + (-1 - Arrays.binarySearch(additions, 0, additionCount, newInfo));
             else if (newMinUndecided != null)
                 newMinUndecidedById = Arrays.binarySearch(newById, 0, newById.length, newMinUndecided);
         }
 
         cachedTxnIds().forceDiscard(additions, additionCount + prunedIds.length);
-        return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, curInfo, newInfo));
+
+        int newPrunedBeforeById = cfk.prunedBeforeById;
+        if (curInfo == null && insertPos <= cfk.prunedBeforeById)
+            ++newPrunedBeforeById;
+
+        return PostProcess.LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
     static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId txnId, CommandsForKey.InternalStatus newStatus, Command command)
@@ -181,7 +186,7 @@ class Updating
 
         Timestamp depsKnownBefore = newStatus.depsKnownBefore(txnId, executeAt);
         SortedCursor<TxnId> deps = command.partialDeps().txnIds(cfk.key());
-        deps.find(cfk.redundantBefore().shardRedundantBefore());
+        deps.find(cfk.redundantBefore());
 
         return Updating.computeInfoAndAdditions(cfk.byId, insertPos, updatePos, txnId, newStatus, ballot, executeAt, depsKnownBefore, deps);
     }
@@ -306,14 +311,14 @@ class Updating
             System.arraycopy(byId, 0, newById, 0, pos);
             newById[pos] = newInfo;
             System.arraycopy(byId, pos, newById, pos + 1, byId.length - pos);
-            if (managesExecution(newInfo))
+            if (managesExecution(newInfo) && cfk.isPostBootstrap(newInfo))
             {
                 if (newInfo.status.compareTo(COMMITTED) >= 0)
                 {
                     if (newMinUndecidedById < 0 || pos <= newMinUndecidedById)
                     {
                         if (pos < newMinUndecidedById) ++newMinUndecidedById;
-                        else newMinUndecidedById = nextUndecided(newById, pos + 1);
+                        else newMinUndecidedById = nextUndecided(newById, pos + 1, cfk);
                     }
                 }
                 else
@@ -330,7 +335,7 @@ class Updating
             newById = byId.clone();
             newById[pos] = newInfo;
             if (pos == newMinUndecidedById && curInfo.status.compareTo(COMMITTED) < 0 && newInfo.status.compareTo(COMMITTED) >= 0)
-                newMinUndecidedById = nextUndecided(newById, pos + 1);
+                newMinUndecidedById = nextUndecided(newById, pos + 1, cfk);
         }
 
         if (loadingAsPrunedFor == null)
@@ -353,7 +358,11 @@ class Updating
         if (testParanoia(SUPERLINEAR, NONE, LOW) && curInfo == null && newInfo.status.compareTo(COMMITTED) < 0)
             validateMissing(newById, NO_TXNIDS, 0, curInfo, newInfo, loadingAsPrunedFor);
 
-        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, curInfo, newInfo);
+        int newPrunedBeforeById = cfk.prunedBeforeById;
+        if (curInfo == null && pos <= cfk.prunedBeforeById)
+            ++newPrunedBeforeById;
+
+        return cfk.update(newById, newMinUndecidedById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
     }
 
     /**
@@ -572,13 +581,13 @@ class Updating
         {
             return Arrays.binarySearch(committedByExecuteAt, 0, committedByExecuteAt.length, curInfo, TxnInfo::compareExecuteAt);
         }
-        return committedByExecuteAt.length;
+        return Integer.MAX_VALUE;
     }
 
     private static TxnInfo[] updateCommittedByExecuteAt(CommandsForKey cfk, int pos, TxnInfo newInfo, boolean wasPruned)
     {
         TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
-        if (pos == committedByExecuteAt.length)
+        if (pos == Integer.MAX_VALUE)
             return committedByExecuteAt;
 
         if (newInfo.status != INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED)
@@ -602,7 +611,7 @@ class Updating
                 int maxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt;
                 if (pos <= maxAppliedWriteByExecuteAt)
                 {
-                    if (pos < maxAppliedWriteByExecuteAt && !wasPruned && cfk.redundantBefore.bootstrappedAt.compareTo(newInfo) < 0)
+                    if (pos < maxAppliedWriteByExecuteAt && !wasPruned && cfk.isPostBootstrap(newInfo))
                     {
                         for (int i = pos; i <= maxAppliedWriteByExecuteAt; ++i)
                         {
@@ -630,7 +639,7 @@ class Updating
     private static int updateMaxAppliedWriteByExecuteAt(CommandsForKey cfk, int pos, TxnInfo newInfo, TxnInfo[] newCommittedByExecuteAt, boolean wasPruned)
     {
         int maxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt;
-        if (pos == cfk.committedByExecuteAt.length)
+        if (pos == Integer.MAX_VALUE) // this is a sentinel pos value returned by committedByExecuteAtUpdatePos to indicate no update
             return maxAppliedWriteByExecuteAt;
 
         boolean inserted = pos < 0;
@@ -650,16 +659,16 @@ class Updating
                 return newMaxAppliedWriteByExecuteAt;
             }
         }
-        else if (newInfo.status == APPLIED)
+        else if (newInfo.status == APPLIED || cfk.isPreBootstrap(newInfo))
         {
-            return maybeUpdateMaxAppliedAndCheckForLinearizabilityViolations(cfk, pos, newInfo.kind(), newInfo, wasPruned);
+            return maybeAdvanceMaxAppliedAndCheckForLinearizabilityViolations(cfk, pos, newInfo.kind(), newInfo, wasPruned);
         }
         return maxAppliedWriteByExecuteAt;
     }
 
-    private static int maybeUpdateMaxAppliedAndCheckForLinearizabilityViolations(CommandsForKey cfk, int appliedPos, Txn.Kind appliedKind, TxnInfo applied, boolean wasPruned)
+    private static int maybeAdvanceMaxAppliedAndCheckForLinearizabilityViolations(CommandsForKey cfk, int appliedPos, Txn.Kind appliedKind, TxnInfo applied, boolean wasPruned)
     {
-        if (!wasPruned && cfk.redundantBefore.bootstrappedAt.compareTo(applied) < 0)
+        if (!wasPruned && cfk.isPostBootstrap(applied))
         {
             TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
             for (int i = cfk.maxAppliedWriteByExecuteAt + 1; i < appliedPos ; ++i)
@@ -672,14 +681,14 @@ class Updating
         return appliedKind == Txn.Kind.Write ? appliedPos : cfk.maxAppliedWriteByExecuteAt;
     }
 
-    static int nextUndecided(TxnInfo[] infos, int pos)
+    static int nextUndecided(TxnInfo[] infos, int pos, CommandsForKey cfk)
     {
         while (true)
         {
             if (pos == infos.length)
                 return -1;
 
-            if (infos[pos].status.compareTo(COMMITTED) < 0 && managesExecution(infos[pos]))
+            if (infos[pos].status.compareTo(COMMITTED) < 0 && managesExecution(infos[pos]) && cfk.isPostBootstrap(infos[pos]))
                 return pos;
 
             ++pos;
@@ -732,8 +741,7 @@ class Updating
         int missingCount = 0;
         // we only populate dependencies to facilitate execution, not for any distributed decision,
         // so we can filter to only transactions we need to execute locally
-        // TODO (required): what if we set bootstrappedAt after?
-        int i = txnIds.find(cfk.locallyRedundantOrBootstrappedBefore());
+        int i = txnIds.find(cfk.redundantOrBootstrappedBefore());
         if (i < 0) i = -1 - i;
         if (i < txnIds.size())
         {
@@ -796,7 +804,7 @@ class Updating
                 }
                 else
                 {
-                    Invariants.checkState(txnIds.get(i++).compareTo(cfk.prunedBefore) < 0);
+                    Invariants.checkState(txnIds.get(i++).compareTo(cfk.prunedBefore()) < 0);
                 }
             }
 
@@ -862,7 +870,12 @@ class Updating
 
                 CommandsForKey result;
                 if (newById == byId) result = new CommandsForKey(cfk, newLoadingPruned, newUnmanaged);
-                else result = new CommandsForKey(cfk.key(), cfk.redundantBefore(), cfk.prunedBefore, newLoadingPruned, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, newUnmanaged);
+                else
+                {
+                    int prunedBeforeById = cfk.prunedBeforeById;
+                    Invariants.checkState(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
+                    result = new CommandsForKey(cfk.key(), cfk.redundantBefore, cfk.bootstrappedAt, newById, newCommittedByExecuteAt, newMinUndecidedById, cfk.maxAppliedWriteByExecuteAt, newLoadingPruned, prunedBeforeById, cfk.safelyPrunedBefore, newUnmanaged);
+                }
 
                 if (loadPruned == NO_TXNIDS)
                     return result;
@@ -876,7 +889,7 @@ class Updating
 
     static CommandsForKeyUpdate registerHistorical(CommandsForKey cfk, TxnId txnId)
     {
-        if (txnId.compareTo(cfk.shardRedundantBefore()) < 0)
+        if (txnId.compareTo(cfk.redundantBefore()) < 0)
             return cfk;
 
         int i = Arrays.binarySearch(cfk.byId, txnId);
@@ -886,9 +899,13 @@ class Updating
                 return cfk;
             return cfk.update(i, txnId, cfk.byId[i], TxnInfo.create(txnId, HISTORICAL, txnId, Ballot.ZERO), false, null);
         }
-        else if (txnId.compareTo(cfk.prunedBefore) >= 0)
+        else if (txnId.compareTo(cfk.prunedBefore()) >= 0)
         {
             return cfk.insert(-1 - i, txnId, TxnInfo.create(txnId, HISTORICAL, txnId, Ballot.ZERO), false, null);
+        }
+        else if (txnId.compareTo(cfk.safelyPrunedBefore) < 0)
+        {
+            return cfk;
         }
         else
         {

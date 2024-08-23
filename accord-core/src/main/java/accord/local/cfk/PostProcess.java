@@ -29,6 +29,8 @@ import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.CommandsForKey.Unmanaged;
+import accord.local.cfk.CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess;
 import accord.primitives.Keys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -40,7 +42,9 @@ import accord.utils.btree.BTree;
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
+import static accord.local.cfk.CommandsForKey.maxContiguousManagedAppliedIndex;
 import static accord.local.cfk.Updating.updateUnmanaged;
 import static accord.local.cfk.Updating.updateUnmanagedAsync;
 import static accord.local.cfk.Utils.findApply;
@@ -48,6 +52,8 @@ import static accord.local.cfk.Utils.findCommit;
 import static accord.local.cfk.Utils.findFirstApply;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.selectUnmanaged;
+import static accord.primitives.TxnId.NO_TXNIDS;
+import static accord.utils.ArrayBuffers.cachedTxnIds;
 
 abstract class PostProcess
 {
@@ -101,7 +107,7 @@ abstract class PostProcess
         {
             if (txnIds.length == 0)
                 return result;
-            return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(result.cfk(), new LoadPruned(result.postProcess(), txnIds));
+            return new CommandsForKeyUpdateWithPostProcess(result.cfk(), new LoadPruned(result.postProcess(), txnIds));
         }
     }
 
@@ -122,6 +128,31 @@ abstract class PostProcess
         }
     }
 
+    static CommandsForKeyUpdate notifyPreBootstrap(CommandsForKeyUpdate update)
+    {
+        CommandsForKey cfk = update.cfk();
+        TxnId[] notify = NO_TXNIDS;
+        int notifyCount = 0;
+        // <= because maxAppliedWrite is actually maxAppliedOrPreBootstrapWrite
+        for (int i = 0 ; i <= cfk.maxAppliedWriteByExecuteAt ; ++i)
+        {
+            TxnInfo txn = cfk.committedByExecuteAt[i];
+            if (txn.status == STABLE)
+            {
+                if (notifyCount == notify.length)
+                    notify = cachedTxnIds().get(Math.max(notifyCount * 2, 8));
+                notify[notifyCount++] = txn.plainTxnId();
+            }
+        }
+
+        if (notifyCount == 0)
+            return update;
+
+        notify = cachedTxnIds().completeAndDiscard(notify, notifyCount);
+        PostProcess newPostProcess = new NotifyNotWaiting(update.postProcess(), notify);
+        return new CommandsForKeyUpdateWithPostProcess(cfk, newPostProcess);
+    }
+
     static class NotifyUnmanagedOfCommit extends PostProcess
     {
         final TxnId[] notify;
@@ -136,7 +167,7 @@ abstract class PostProcess
         {
             SafeCommandsForKey safeCfk = safeStore.get(key);
             CommandsForKey cfk = safeCfk.current();
-            List<CommandsForKey.Unmanaged> addUnmanageds = new ArrayList<>();
+            List<Unmanaged> addUnmanageds = new ArrayList<>();
             List<PostProcess> nestedNotify = new ArrayList<>();
             for (TxnId txnId : notify)
             {
@@ -159,9 +190,9 @@ abstract class PostProcess
             if (!addUnmanageds.isEmpty())
             {
                 CommandsForKey cur = safeCfk.current();
-                addUnmanageds.sort(CommandsForKey.Unmanaged::compareTo);
-                CommandsForKey.Unmanaged[] newUnmanageds = addUnmanageds.toArray(new CommandsForKey.Unmanaged[0]);
-                newUnmanageds = SortedArrays.linearUnion(cur.unmanageds, 0, cur.unmanageds.length, newUnmanageds, 0, newUnmanageds.length, CommandsForKey.Unmanaged::compareTo, ArrayBuffers.uncached(CommandsForKey.Unmanaged[]::new));
+                addUnmanageds.sort(Unmanaged::compareTo);
+                Unmanaged[] newUnmanageds = addUnmanageds.toArray(new Unmanaged[0]);
+                newUnmanageds = SortedArrays.linearUnion(cur.unmanageds, 0, cur.unmanageds.length, newUnmanageds, 0, newUnmanageds.length, Unmanaged::compareTo, ArrayBuffers.uncached(Unmanaged[]::new));
                 safeCfk.set(cur.update(newUnmanageds));
             }
 
@@ -170,14 +201,35 @@ abstract class PostProcess
         }
     }
 
-    static CommandsForKeyUpdate notifyUnmanaged(CommandsForKey cfk, @Nullable TxnInfo curInfo, TxnInfo newInfo)
+
+    static class NotifyUnmanagedResult
+    {
+        final Unmanaged[] newUnmanaged;
+        final PostProcess postProcess;
+
+        NotifyUnmanagedResult(Unmanaged[] newUnmanaged, PostProcess postProcess)
+        {
+            this.newUnmanaged = newUnmanaged;
+            this.postProcess = postProcess;
+        }
+    }
+
+    static NotifyUnmanagedResult notifyUnmanaged(Unmanaged[] unmanageds,
+                                                 TxnInfo[] byId,
+                                                 int minUndecidedById,
+                                                 TxnInfo[] committedByExecuteAt,
+                                                 int maxAppliedWriteByExecuteAt,
+                                                 Object[] loadingPruned,
+                                                 TxnId redundantBefore,
+                                                 TxnId bootstrappedAt,
+                                                 @Nullable TxnInfo curInfo,
+                                                 @Nullable TxnInfo newInfo)
     {
         PostProcess notifier = null;
-        CommandsForKey.Unmanaged[] unmanageds = cfk.unmanageds;
         {
             // notify commit uses exclusive bounds, as we use minUndecided
-            Timestamp minUndecided = cfk.minUndecidedById < 0 ? Timestamp.MAX : cfk.byId[cfk.minUndecidedById];
-            if (!BTree.isEmpty(cfk.loadingPruned)) minUndecided = Timestamp.min(minUndecided, BTree.<Pruning.LoadingPruned>findByIndex(cfk.loadingPruned, 0));
+            Timestamp minUndecided = minUndecidedById < 0 ? Timestamp.MAX : byId[minUndecidedById];
+            if (!BTree.isEmpty(loadingPruned)) minUndecided = Timestamp.min(minUndecided, BTree.<Pruning.LoadingPruned>findByIndex(loadingPruned, 0));
             int end = findCommit(unmanageds, minUndecided);
             if (end > 0)
             {
@@ -190,16 +242,25 @@ abstract class PostProcess
             }
         }
 
-        if (newInfo.status.compareTo(APPLIED) >= 0)
         {
-            TxnInfo maxContiguousApplied = cfk.maxContiguousManagedApplied();
-            if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) < 0)
-                maxContiguousApplied = null;
-
-            if (maxContiguousApplied != null)
+            Timestamp applyTo = null;
+            if (newInfo != null)
+            {
+                if (newInfo.status == APPLIED)
+                {
+                    TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                    if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
+                        applyTo = maxContiguousApplied.executeAt;
+                }
+            }
+            else
+            {
+                applyTo = TxnId.nonNullOrMax(redundantBefore, bootstrappedAt);
+            }
+            if (applyTo != null)
             {
                 int start = findFirstApply(unmanageds);
-                int end = findApply(unmanageds, start, maxContiguousApplied.executeAt);
+                int end = findApply(unmanageds, start, applyTo);
                 if (start != end)
                 {
                     TxnId[] notifyNotWaiting = selectUnmanaged(unmanageds, start, end);
@@ -208,9 +269,9 @@ abstract class PostProcess
                 }
             }
         }
-        if (newInfo.status == INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED && curInfo != null && curInfo.status.isCommitted())
+
+        if (newInfo != null && newInfo.status == INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED && curInfo != null && curInfo.status.isCommitted())
         {
-            TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
             // this is a rare edge case, but we might have unmanaged transactions waiting on this command we must re-schedule or notify
             int start = findFirstApply(unmanageds);
             int end = start;
@@ -224,7 +285,7 @@ abstract class PostProcess
 
                 if (predecessor >= 0)
                 {
-                    int maxContiguousApplied = cfk.maxContiguousManagedAppliedIndex();
+                    int maxContiguousApplied = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                     if (maxContiguousApplied >= predecessor)
                         predecessor = -1;
                 }
@@ -234,7 +295,7 @@ abstract class PostProcess
                     Timestamp waitingUntil = committedByExecuteAt[predecessor].plainExecuteAt();
                     unmanageds = unmanageds.clone();
                     for (int i = start ; i < end ; ++i)
-                        unmanageds[i] = new CommandsForKey.Unmanaged(APPLY, unmanageds[i].txnId, waitingUntil);
+                        unmanageds[i] = new Unmanaged(APPLY, unmanageds[i].txnId, waitingUntil);
                 }
                 else
                 {
@@ -246,9 +307,9 @@ abstract class PostProcess
         }
 
         if (notifier == null)
-            return cfk;
+            return null;
 
-        return new CommandsForKeyUpdate.CommandsForKeyUpdateWithPostProcess(new CommandsForKey(cfk, cfk.loadingPruned, unmanageds), notifier);
+        return new NotifyUnmanagedResult(unmanageds, notifier);
     }
 
 }

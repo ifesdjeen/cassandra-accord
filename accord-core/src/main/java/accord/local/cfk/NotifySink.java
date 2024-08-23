@@ -67,9 +67,9 @@ interface NotifySink
         }
 
         @Override
-        public void waitingOn(SafeCommandStore safeStore, TxnInfo uncommitted, Key key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
+        public void waitingOn(SafeCommandStore safeStore, TxnInfo notify, Key key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
         {
-            TxnId txnId = uncommitted.plainTxnId();
+            TxnId txnId = notify.plainTxnId();
             PreLoadContext context = PreLoadContext.contextFor(txnId);
 
             if (safeStore.canExecuteWith(context)) doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk);

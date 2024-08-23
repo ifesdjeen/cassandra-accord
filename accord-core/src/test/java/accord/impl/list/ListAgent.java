@@ -132,6 +132,7 @@ public class ListAgent implements Agent
     @Override
     public long attemptCoordinationDelay(TxnId txnId, CommandStore commandStore, TimeUnit units)
     {
+        // TODO (required): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 

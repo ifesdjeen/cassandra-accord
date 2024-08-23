@@ -34,7 +34,7 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
  * <p>
  * We have:
  * - BaseTxnState defines the state that each of the child classes operate on and provides shared
- * methods for updating it, particularly with relation to tracking timer scheduling
+ *   methods for updating it, particularly with relation to tracking timer scheduling
  * - WaitingState defines the methods for updating the WaitingState state machine (i.e. for local commands that are waiting on a dependency's outcome)
  * - HomeState defines the methods for updating the HomeState state machine (i.e. for coordinators ensuring a transaction completes)
  * <p>

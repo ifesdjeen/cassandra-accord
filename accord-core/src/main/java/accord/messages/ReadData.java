@@ -240,11 +240,11 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         {
             default: throw new AssertionError("Unhandled Action: " + actionForStatus(command.saveStatus()));
             case WAIT:
-                return false;
+                return true;
 
             case OBSOLETE:
                 onFailure(Redundant, null);
-                return true;
+                return false;
 
             case EXECUTE:
                 if (!reading.get(storeId))

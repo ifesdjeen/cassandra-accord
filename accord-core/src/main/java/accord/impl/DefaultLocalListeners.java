@@ -316,8 +316,13 @@ public class DefaultLocalListeners implements LocalListeners
                     cur.set(i - removed, next);
                 ++i;
             }
+
+            if (removed == i)
+                return null;
+
             while (removed-- > 0)
                 cur.remove(cur.size() - 1);
+
             return cur;
         });
     }

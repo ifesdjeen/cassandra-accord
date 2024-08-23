@@ -40,7 +40,7 @@ import static accord.utils.ArrayBuffers.cachedTxnIds;
 public class Pruning
 {
     /**
-     * A TxnId that we have witnessed as a dependency that predates {@link #prunedBefore}, so we must load its
+     * A TxnId that we have witnessed as a dependency that predates {@link CommandsForKey#prunedBefore()}, so we must load its
      * Command state to determine if this is a new transaction to track, or if it is an already-applied transaction
      * we have pruned.
      *
@@ -180,7 +180,7 @@ public class Pruning
                 return cfk;
 
             newPrunedBefore = cfk.committedByExecuteAt[i];
-            if (newPrunedBefore.compareTo(cfk.prunedBefore) <= 0)
+            if (newPrunedBefore.compareTo(cfk.prunedBefore()) <= 0)
                 return cfk;
         }
 
@@ -199,7 +199,7 @@ public class Pruning
      */
     static CommandsForKey pruneBefore(CommandsForKey cfk, TxnInfo newPrunedBefore, int pos)
     {
-        Invariants.checkArgument(newPrunedBefore.compareTo(cfk.prunedBefore) >= 0, "Expect new prunedBefore to be ahead of existing one");
+        Invariants.checkArgument(newPrunedBefore.compareTo(cfk.prunedBefore()) >= 0, "Expect new prunedBefore to be ahead of existing one");
 
         TxnInfo[] byId = cfk.byId;
         int minUndecidedById;
@@ -207,7 +207,7 @@ public class Pruning
         // a store of committed executeAts we have removed where we cannot otherwise cheaply infer it
         Object[] removedExecuteAts = NO_TXNIDS;
         int removedExecuteAtCount = 0;
-        TxnInfo[] newInfos;
+        TxnInfo[] newById;
         {
             minUndecidedById = cfk.minUndecidedById;
             int minUndecidedByIdDelta = 0;
@@ -267,7 +267,7 @@ public class Pruning
                 return cfk;
 
             int removedByIdCount = pos - retainCount;
-            newInfos = new TxnInfo[byId.length - removedByIdCount];
+            newById = new TxnInfo[byId.length - removedByIdCount];
             if (minUndecidedById >= 0)
             {
                 if (minUndecidedById >= pos)
@@ -313,10 +313,10 @@ public class Pruning
                         }
                 }
 
-                newInfos[--insertPos] = txn;
+                newById[--insertPos] = txn;
             }
-            Invariants.checkState(retainCount + byId.length - pos == newInfos.length);
-            System.arraycopy(byId, pos, newInfos, retainCount, byId.length - pos);
+            Invariants.checkState(retainCount + byId.length - pos == newById.length);
+            System.arraycopy(byId, pos, newById, retainCount, byId.length - pos);
         }
 
         TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
@@ -350,6 +350,7 @@ public class Pruning
 
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
-        return new CommandsForKey(cfk.key, cfk.redundantBefore, newPrunedBefore, cfk.loadingPruned, newInfos, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.unmanageds);
+        Invariants.checkState(newById[retainCount] == newPrunedBefore);
+        return new CommandsForKey(cfk.key, cfk.redundantBefore, cfk.bootstrappedAt, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.loadingPruned, retainCount, cfk.safelyPrunedBefore, cfk.unmanageds);
     }
 }

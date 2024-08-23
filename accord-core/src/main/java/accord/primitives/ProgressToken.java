@@ -103,10 +103,10 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
 
         Ballot promised = command.promised();
         boolean isAccepted = status.hasBeen(AcceptedInvalidate) && command.acceptedOrCommitted().equals(command.promised());
-        if (this.promised.compareTo(promised) > 0)
+        if (this.promised.compareTo(promised) >= 0)
         {
             promised = this.promised;
-            isAccepted = this.isAccepted;
+            isAccepted = this.isAccepted || (isAccepted && this.promised.equals(promised));
         }
 
         if (isSame(durability, status, promised, isAccepted))
