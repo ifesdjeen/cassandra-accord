@@ -37,7 +37,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
     public static final ProgressToken INVALIDATED = new ProgressToken(Durability.MajorityOrInvalidated, Status.Invalidated, Ballot.ZERO, false);
     public static final ProgressToken APPLIED = new ProgressToken(Durability.NotDurable, Status.PreApplied, Ballot.ZERO, false);
     public static final ProgressToken DURABLE = new ProgressToken(Durability.Majority, Status.PreApplied, Ballot.ZERO, false);
-    public static final ProgressToken TRUNCATED = new ProgressToken(Durability.MajorityOrInvalidated, Status.Truncated, Ballot.ZERO, false);
+    public static final ProgressToken TRUNCATED_DURABLE_OR_INVALIDATED = new ProgressToken(Durability.MajorityOrInvalidated, Status.Truncated, Ballot.ZERO, false);
 
     public final Durability durability;
     public final Status status;

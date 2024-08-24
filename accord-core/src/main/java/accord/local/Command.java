@@ -564,7 +564,7 @@ public abstract class Command implements CommonAttributes
     public final boolean isCommitted()
     {
         SaveStatus saveStatus = saveStatus();
-        return saveStatus.hasBeen(Status.Committed) && !saveStatus.hasBeen(Invalidated);
+        return saveStatus.hasBeen(Status.Committed) && !saveStatus.is(Invalidated);
     }
 
     public final boolean isStable()
@@ -575,7 +575,7 @@ public abstract class Command implements CommonAttributes
 
     public static boolean isStable(SaveStatus saveStatus)
     {
-        return saveStatus.hasBeen(Status.Stable) && !saveStatus.hasBeen(Invalidated);
+        return saveStatus.hasBeen(Status.Stable) && !saveStatus.is(Invalidated);
     }
 
     public final Committed asCommitted()

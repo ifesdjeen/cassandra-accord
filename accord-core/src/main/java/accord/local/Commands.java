@@ -58,6 +58,7 @@ import static accord.api.ProgressLog.HomeShard.No;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
+import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.truncatedApply;
 import static accord.local.Command.Truncated.truncatedApplyWithOutcome;
 import static accord.local.KeyHistory.TIMESTAMPS;
@@ -865,27 +866,26 @@ public class Commands
         switch (cleanup)
         {
             default: throw new AssertionError("Unexpected cleanup: " + cleanup);
+            case INVALIDATE:
+                Invariants.checkArgument(!command.hasBeen(PreCommitted));
+                result = invalidated(command);
+                break;
+
             case TRUNCATE_WITH_OUTCOME:
                 Invariants.checkArgument(!command.hasBeen(Truncated));
-                if (command.hasBeen(PreApplied))
-                {
-                    result = truncatedApplyWithOutcome(command.asExecuted());
-                    break;
-                }
-                // TODO (expected, consider): should we downgrade to no truncation in this case? Or are we stale?
+                Invariants.checkState(command.hasBeen(PreApplied));
+                result = truncatedApplyWithOutcome(command.asExecuted());
+                break;
 
             case TRUNCATE:
-                // TODO (expected): consider passing through any information we have about the reason for loading, so we can infer APPLIED if !PreCommitted
                 Invariants.checkState(command.saveStatus().compareTo(TruncatedApply) < 0);
-                if (!command.hasBeen(PreCommitted)) result = Command.Truncated.erasedOrInvalidOrVestigial(command);
-                else result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
-                safeStore.progressLog().clear(command.txnId());
+                Invariants.checkState(command.hasBeen(PreApplied));
+                result = truncatedApply(command, Route.tryCastToFullRoute(maybeFullRoute));
                 break;
 
             case ERASE:
                 Invariants.checkState(command.saveStatus().compareTo(Erased) < 0);
                 result = erased(command);
-                safeStore.progressLog().clear(command.txnId());
                 break;
         }
 

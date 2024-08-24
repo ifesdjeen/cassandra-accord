@@ -18,6 +18,10 @@
 
 package accord.local;
 
+import java.util.List;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
 import accord.local.Status.*;
 import accord.primitives.Ballot;
 
@@ -124,7 +128,7 @@ public enum SaveStatus
         /**
          * Some or all of the command's local state has been garbage collected
          */
-        CleaningUp;
+        CleaningUp
     }
 
     private static final SaveStatus[] lookup = values();
@@ -326,6 +330,34 @@ public enum SaveStatus
         if (preferKnowledge && a.lowerHasMoreKnowledge(b))
             return a.compareTo(b) <= 0 ? av : bv;
         return a.compareTo(b) >= 0 ? av : bv;
+    }
+
+    public static <T> T max(List<T> list, Function<T, SaveStatus> getStatus, Function<T, Ballot> getAcceptedOrCommittedBallot, Predicate<T> filter, boolean preferKnowledge)
+    {
+        T max = null;
+        SaveStatus maxStatus = null;
+        Ballot maxBallot = null;
+        for (T item : list)
+        {
+            if (!filter.test(item))
+                continue;
+
+            SaveStatus status = getStatus.apply(item);
+            Ballot ballot = getAcceptedOrCommittedBallot.apply(item);
+            boolean update = max == null
+                             || maxStatus.phase.compareTo(status.phase) < 0
+                             || (maxStatus.phase.tieBreakWithBallot ? maxStatus.phase == status.phase && maxBallot.compareTo(ballot) < 0
+                                                                    : maxStatus.compareTo(status) < 0);
+
+            if (!update)
+                continue;
+
+            max = item;
+            maxStatus = status;
+            maxBallot = ballot;
+        }
+
+        return max;
     }
 
     // TODO (desired): this isn't a simple linear relationship - Committed has some more knowledge, but some less; PreAccepted has much less

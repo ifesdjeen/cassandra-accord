@@ -538,6 +538,14 @@ public enum Status
         }
 
         /**
+         * Is known to have agreed to execute or not; but the decision is not known (maybe erased)
+         */
+        public boolean hasDecision()
+        {
+            return compareTo(ExecuteAtKnown) >= 0;
+        }
+
+        /**
          * Is known to execute, and when.
          */
         public boolean isDecidedAndKnownToExecute()

@@ -49,7 +49,7 @@ import static accord.local.Status.KnownExecuteAt.ExecuteAtKnown;
 import static accord.local.Status.Outcome.Apply;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
-import static accord.primitives.ProgressToken.TRUNCATED;
+import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Route.castToFullRoute;
 import static accord.utils.Invariants.illegalState;
 
@@ -234,7 +234,7 @@ public class RecoverWithRoute extends CheckShards<FullRoute<?>>
                 break;
 
             case Erased:
-                Propagate.propagate(node, txnId, sourceEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED : null, f));
+                Propagate.propagate(node, txnId, sourceEpoch, success.withQuorum, route, route, null, full, (s, f) -> callback.accept(f == null ? TRUNCATED_DURABLE_OR_INVALIDATED : null, f));
                 break;
         }
     }

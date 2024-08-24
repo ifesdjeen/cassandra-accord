@@ -67,7 +67,7 @@ import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
-import static accord.primitives.ProgressToken.TRUNCATED;
+import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.utils.Invariants.debug;
 import static accord.utils.Invariants.illegalState;
 
@@ -295,7 +295,7 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             }
         }
 
-        if (acceptOrCommit != acceptOrCommitNotTruncated)
+        if (acceptOrCommit != null)
         {
             boolean allShardsTruncated = true;
             for (Shard shard : topology.shards())
@@ -305,8 +305,15 @@ public class Recover implements Callback<RecoverReply>, BiConsumer<Result, Throw
             }
             if (allShardsTruncated)
             {
+                // TODO (required, correctness): this is not a safe inference in the case of an ErasedOrInvalidOrVestigial response.
+                //   We need to tighten up the inference and spread of truncation/invalid outcomes.
+                //   In this case, at minimum this can lead to liveness violations as the home shard stops coordinating
+                //   a command that it hasn't invalidated, but nor is it possible to recover. This happens because
+                //   when the home shard shares all of its replicas with another shard that has autonomously invalidated
+                //   the transaction, so that all received InvalidateReply show truncation (when in fact this is only partial).
+                //   We could paper over this, but better to revisit and provide stronger invariants we can rely on.
                 isDone = true;
-                callback.accept(TRUNCATED, null);
+                callback.accept(TRUNCATED_DURABLE_OR_INVALIDATED, null);
                 return;
             }
         }
