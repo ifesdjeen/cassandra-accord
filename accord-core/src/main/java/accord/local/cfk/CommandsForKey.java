@@ -69,6 +69,7 @@ import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.cfk.Utils.removeRedundantMissing;
+import static accord.primitives.Timestamp.min;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -1581,9 +1582,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 int decidedBefore = minUndecidedById < 0 ? byId.length : minUndecidedById;
                 if (!BTree.isEmpty(loadingPruned))
                 {
-                    decidedBefore = Arrays.binarySearch(byId, BTree.findByIndex(loadingPruned, 0));
-                    if (decidedBefore < 0)
-                        decidedBefore = -2 - decidedBefore;
+                    int maxDecidedBefore = Arrays.binarySearch(byId, BTree.findByIndex(loadingPruned, 0));
+                    if (maxDecidedBefore < 0)
+                        maxDecidedBefore = -2 - maxDecidedBefore;
+                    if (maxDecidedBefore < decidedBefore)
+                        decidedBefore = maxDecidedBefore;
                 }
                 int appliedBefore = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 for (Unmanaged unmanaged : unmanageds)

@@ -62,8 +62,8 @@ abstract class HomeState extends WaitingState
     void set(DefaultProgressLog instance, CoordinatePhase newCoordinatePhase, Progress newProgress)
     {
         encodedState &= SET_MASK;
-        encodedState |= (newCoordinatePhase.ordinal() << COORDINATE_STATUS_SHIFT)
-                        | (newProgress.ordinal() << COORDINATE_PROGRESS_SHIFT);
+        encodedState |= ((long)newCoordinatePhase.ordinal() << COORDINATE_STATUS_SHIFT)
+                        | ((long)newProgress.ordinal() << COORDINATE_PROGRESS_SHIFT);
 
         if (newProgress == NoneExpected)
             instance.clearProgressToken(txnId);

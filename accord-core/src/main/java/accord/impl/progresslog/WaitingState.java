@@ -70,7 +70,12 @@ import static accord.primitives.EpochSupplier.constant;
  * This represents a simple state machine encoded in a small number of bits for efficiently gathering
  * distributed state we require locally to make progress.
  * <p>
- * TODO (required): describe state machine
+ * The state machine consists of the following packed registers:
+ *  - target BlockedUntil
+ *  - The BlockUntil we know at least one home shard replica is able to satisfy
+ *  - A packed bitset/counter for enumerating the relevant keys and awaiting
+ *    remote replicas for the keys to be ready to satisfy our local requirements
+ *
  */
 @SuppressWarnings("CodeBlock2Expr")
 abstract class WaitingState extends BaseTxnState
