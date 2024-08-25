@@ -18,12 +18,10 @@
 
 package accord.impl;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 
 import accord.api.LocalListeners;
 import accord.api.RemoteListeners;
@@ -193,10 +191,12 @@ public class DefaultLocalListeners implements LocalListeners
         }
     }
 
-    class RegisteredComplexListener implements Registered
+    class RegisteredComplexListener implements Registered, BiFunction<TxnId, RegisteredComplexListeners, RegisteredComplexListeners>
     {
         final TxnId txnId;
         final ComplexListener listener;
+        int index;
+
         RegisteredComplexListener(TxnId txnId, ComplexListener listener)
         {
             this.listener = listener;
@@ -206,7 +206,150 @@ public class DefaultLocalListeners implements LocalListeners
         @Override
         public void cancel()
         {
-            complexListeners.getOrDefault(txnId, Collections.emptyList()).remove(this);
+            if (index < 0)
+                return;
+
+            complexListeners.compute(txnId, this);
+        }
+
+        @Override
+        public RegisteredComplexListeners apply(TxnId txnId, RegisteredComplexListeners listeners)
+        {
+            if (listeners == null)
+                return null;
+            return listeners.remove(this);
+        }
+    }
+
+    /**
+     * a very simple list that we can leave null entries in to make removals and reentry easier.
+     *  - removal is easier because we can store an index to the array entry to null it out instantly
+     *  - reentry is easier because the notifying thread doesn't need to worry about stuff moving around
+     *
+     * Methods assume mutual exclusion is guaranteed by the caller, but DOES permit reentry.
+     */
+    static class RegisteredComplexListeners
+    {
+        static final RegisteredComplexListener[] NO_LISTENERS = new RegisteredComplexListener[0];
+        RegisteredComplexListener[] listeners = NO_LISTENERS;
+        int count, length;
+        boolean notifying;
+
+        /**
+         * Append to the end of the list; if we aren't reentering from notify then if the next position
+         * in the list is unavailable and the list is half empty we first compact the list to remove null entries
+         */
+        RegisteredComplexListeners remove(RegisteredComplexListener remove)
+        {
+            int index = remove.index;
+            if (index < 0)
+                return this; // already removed
+
+            Invariants.checkState(listeners[index] == remove);
+            listeners[index] = null;
+            remove.index = -1;
+            // we don't decrement length even if count==length so as to simplify reentry
+            --count;
+            return count > 0 || notifying ? this : null;
+        }
+
+        /**
+         * Append to the end of the list; if we aren't reentering from notify then if the next position
+         * in the list is unavailable and the list is half empty we first compact the list to remove null entries;
+         * otherwise we resize the array leaving the entries in their original position
+         */
+        void add(RegisteredComplexListener add)
+        {
+            if (listeners.length == length)
+            {
+                RegisteredComplexListener[] oldListeners = listeners;
+                if (length >= count / 2 || notifying)
+                    listeners = new RegisteredComplexListener[Math.max(2, length * 2)];
+
+                if (count == length || notifying)
+                {
+                    // copy to same positions
+                    System.arraycopy(oldListeners, 0, listeners, 0, count);
+                }
+                else
+                {
+                    // copy and compact
+                    int c = 0;
+                    for (int i = 0 ; i < length ; ++i)
+                    {
+                        if (oldListeners[i] == null) continue;
+                        Invariants.checkState(oldListeners[i].index == i);
+                        listeners[c] = oldListeners[i];
+                        listeners[c].index = c;
+                        c++;
+                    }
+                    if (listeners == oldListeners)
+                        Arrays.fill(listeners, c, length, null);
+                    Invariants.checkState(c == count);
+                    length = count;
+                }
+            }
+            listeners[length] = add;
+            add.index = length;
+            length++;
+            count++;
+        }
+
+        /**
+         * Notify any listeners, permitting those listeners to reenter and register/cancel listeners against this TxnId.
+         * We do this by ensuring the position of listeners doesn't change while notifying, and visiting only those
+         * listeners that were present when we started. We compact the listener collection as we go, though given
+         * reentry there is no guarantee the list at exit is compacted.
+         */
+        RegisteredComplexListeners notify(SafeCommandStore safeStore, SafeCommand safeCommand, NotifySink notifySink)
+        {
+            int count = 0;
+            int length = this.length;
+
+            notifying = true;
+            for (int i = 0 ; i < length ; ++i)
+            {
+                RegisteredComplexListener next = listeners[i];
+                if (next == null) continue;
+                Invariants.checkState(next.index == i);
+                if (!notifySink.notify(safeStore, safeCommand, listeners[i].listener))
+                {
+                    if (next.index >= 0)
+                        --this.count;
+                    next.index = -1;
+                }
+                else
+                {
+                    if (i != count)
+                    {
+                        listeners[count] = next;
+                        next.index = count;
+                    }
+                    ++count;
+                }
+            }
+            notifying = false;
+
+            if (length != this.length)
+            {
+                // we have had some concurrent insertions (concurrent removals do not alter length)
+                // we also have some empty slots, so compact the new entries
+                for (int i = length ; i < this.length ; ++i)
+                {
+                    RegisteredComplexListener next = listeners[i];
+                    Invariants.checkState(next.index == i);
+                    listeners[count] = next;
+                    next.index = count;
+                    count++;
+                }
+                length = this.length;
+                Invariants.checkState(this.count == count);
+            }
+
+            Arrays.fill(listeners, count, length, null);
+            this.length = count;
+
+            return count == 0 ? null : this;
         }
     }
 
@@ -225,7 +368,7 @@ public class DefaultLocalListeners implements LocalListeners
     private final RemoteListeners remoteListeners;
     private final NotifySink notifySink;
 
-    private final ConcurrentHashMap<TxnId, List<RegisteredComplexListener>> complexListeners = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<TxnId, RegisteredComplexListeners> complexListeners = new ConcurrentHashMap<>();
     private Object[] txnListeners = BTree.empty();
 
     public DefaultLocalListeners(RemoteListeners remoteListeners, NotifySink notifySink)
@@ -249,7 +392,7 @@ public class DefaultLocalListeners implements LocalListeners
         RegisteredComplexListener entry = new RegisteredComplexListener(txnId, listener);
         complexListeners.compute(txnId, (id, cur) -> {
             if (cur == null)
-                cur = new ArrayList<>();
+                cur = new RegisteredComplexListeners();
             cur.add(entry);
             return cur;
         });
@@ -299,31 +442,10 @@ public class DefaultLocalListeners implements LocalListeners
 
     private void notifyComplexListeners(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        if (complexListeners.get(safeCommand.txnId()) == null)
-            return;
-
         complexListeners.compute(safeCommand.txnId(), (id, cur) -> {
             if (cur == null)
                 return null;
-
-            int i = 0, removed = 0;
-            while (i < cur.size())
-            {
-                RegisteredComplexListener next = cur.get(i);
-                if (!notifySink.notify(safeStore, safeCommand, next.listener))
-                    removed++;
-                else if (removed > 0)
-                    cur.set(i - removed, next);
-                ++i;
-            }
-
-            if (removed == i)
-                return null;
-
-            while (removed-- > 0)
-                cur.remove(cur.size() - 1);
-
-            return cur;
+            return cur.notify(safeStore, safeCommand, notifySink);
         });
     }
 

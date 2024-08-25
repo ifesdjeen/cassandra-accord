@@ -30,6 +30,7 @@ enum CoordinatorActivity
 
     /**
      * Another replica is known to be coordinating, so we simply monitor to ensure it continues
+     * TODO (expected): implement this behavioural refinement
      */
     Monitoring,
 
@@ -40,8 +41,10 @@ enum CoordinatorActivity
 
     /**
      * We are actively coordinating the transaction
+     * TODO (expected): implement this behavioural refinement
      */
-    Coordinating;
+    Coordinating,
+    ;
 
     private static final CoordinatorActivity[] lookup = values();
 

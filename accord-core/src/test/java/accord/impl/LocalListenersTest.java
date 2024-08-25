@@ -58,6 +58,7 @@ import accord.utils.RandomTestRunner;
 
 import static accord.local.Status.Durability.NotDurable;
 
+// TODO (expected): test reentry
 public class LocalListenersTest
 {
     @Test
@@ -71,7 +72,7 @@ public class LocalListenersTest
     @Test
     public void testOne()
     {
-        testOne(-392552404799190391L, 10000);
+        testOne(8206571124411198469L, 10000);
     }
 
     private void testOne(long seed, int ops)
