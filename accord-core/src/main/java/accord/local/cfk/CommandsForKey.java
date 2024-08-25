@@ -26,6 +26,9 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Key;
 
 import accord.api.VisibleForImplementation;
@@ -69,7 +72,6 @@ import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
 import static accord.local.cfk.Utils.removeRedundantMissing;
-import static accord.primitives.Timestamp.min;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -191,6 +193,8 @@ import static accord.utils.btree.UpdateFunction.noOp;
  */
 public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSummary
 {
+    private static final Logger logger = LoggerFactory.getLogger(CommandsForKey.class);
+
     private static final boolean ELIDE_TRANSITIVE_DEPENDENCIES = true;
 
     public static final TxnInfo NO_INFO = new TxnInfo(TxnId.NONE, HISTORICAL, TxnId.NONE);
@@ -1193,10 +1197,16 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         TxnId updatedTxnId = command.txnId();
         TxnInfo newInfo = get(updatedTxnId);
         InternalStatus newStatus = newInfo.status;
-        if (newStatus == STABLE && isPreBootstrap(updatedTxnId))
         {
-            notifySink.notWaiting(safeStore, updatedTxnId, key);
-            return;
+            TxnInfo maxAppliedWrite = maxAppliedWrite();
+            if (newStatus == STABLE && newInfo.executeAt.compareTo(maxAppliedWrite.executeAt) < 0)
+            {
+                // We have a read or write that has been made stable before our latest write.
+                // This is either a linearizability violation, or it is pre-bootstrap.
+                checkBehindCommitForLinearizabilityViolation(newInfo, maxAppliedWrite);
+                notifySink.notWaiting(safeStore, updatedTxnId, key);
+                return;
+            }
         }
 
         TxnInfo prevInfo = prevCfk.get(updatedTxnId);
@@ -1503,12 +1513,18 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         return minUndecidedById < 0 ? null : byId[minUndecidedById].plainTxnId();
     }
 
+    TxnInfo maxAppliedWrite()
+    {
+        return maxAppliedWriteByExecuteAt < 0 ? NO_INFO : committedByExecuteAt[maxAppliedWriteByExecuteAt];
+    }
+
     static int maxContiguousManagedAppliedIndex(TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, TxnId bootstrappedAt)
     {
         int i = maxAppliedWriteByExecuteAt + 1;
         while (i < committedByExecuteAt.length)
         {
             TxnInfo txn = committedByExecuteAt[i];
+            // TODO (expected): should we count any final run of !managesExecution()? i.e. if we have Y(es)N(o)YNYNNN, should we not stop after only YNYNY?
             if (txn.status != APPLIED && managesExecution(txn) && (bootstrappedAt == null || bootstrappedAt.compareTo(txn) <= 0))
                 break;
             ++i;
@@ -1520,6 +1536,41 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     {
         int i = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
         return i < 0 ? null : committedByExecuteAt[i];
+    }
+
+    /**
+     * Treat anything pre bootstrap or redundant as applied. i.e.,
+     *
+     * max(max(bootstrappedAt, redundantBefore), maxContiguousManagedApplied().executeAt)
+     */
+    static Timestamp maxContiguousManagedAppliedExecuteAt(TxnInfo[] committedByExecuteAt, int maxAppliedWriteByExecuteAt, TxnId bootstrappedAt, TxnId redundantBefore)
+    {
+        Timestamp maxBound = TxnId.nonNullOrMax(redundantBefore, bootstrappedAt);
+        TxnInfo maxInfo = maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+        if (maxInfo == null || maxInfo.executeAt.compareTo(maxBound) < 0)
+            return maxBound;
+        return maxInfo.executeAt;
+    }
+
+    private void checkBehindCommitForLinearizabilityViolation(TxnInfo newInfo, TxnInfo maxAppliedWrite)
+    {
+        if (!isPreBootstrap(newInfo))
+        {
+            for (int i = maxAppliedWriteByExecuteAt ; i >= 0 ; --i)
+            {
+                TxnInfo txn = committedByExecuteAt[i];
+                if (newInfo == txn)
+                {
+                    // we haven't found anything pre-bootstrap that follows this command, so log a linearizability violation
+                    // TODO (expected): this should be a rate-limited logger; need to integrate with Cassandra
+                    logger.error("Linearizability violation on key {}: {} is committed to execute (at {}) before {} that should witness it but has already applied (at {})", key, newInfo.plainTxnId(), newInfo.plainExecuteAt(), maxAppliedWrite.plainTxnId(), maxAppliedWrite.plainExecuteAt());
+                    break;
+                }
+
+                if (isPreBootstrap(txn))
+                    break;
+            }
+        }
     }
 
     private void checkIntegrity()
@@ -1589,6 +1640,18 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                         decidedBefore = maxDecidedBefore;
                 }
                 int appliedBefore = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                if (bootstrappedAt != null)
+                {
+                    for (int i = 0 ; i < appliedBefore ; ++i)
+                    {
+                        if (committedByExecuteAt[i].compareTo(bootstrappedAt) < 0) continue;
+                        if (committedByExecuteAt[i].status != APPLIED)
+                        {
+                            appliedBefore = i;
+                            break;
+                        }
+                    }
+                }
                 for (Unmanaged unmanaged : unmanageds)
                 {
                     switch (unmanaged.pending)

@@ -44,6 +44,7 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALID_OR_TRUNCATED_OR_UNMANAGED_COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
+import static accord.local.cfk.CommandsForKey.maxContiguousManagedAppliedExecuteAt;
 import static accord.local.cfk.CommandsForKey.maxContiguousManagedAppliedIndex;
 import static accord.local.cfk.Updating.updateUnmanaged;
 import static accord.local.cfk.Updating.updateUnmanagedAsync;
@@ -52,7 +53,6 @@ import static accord.local.cfk.Utils.findCommit;
 import static accord.local.cfk.Utils.findFirstApply;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.selectUnmanaged;
-import static accord.primitives.Timestamp.max;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 
@@ -253,6 +253,7 @@ abstract class PostProcess
             }
             else if (newInfo == null)
             {
+//                applyTo = maxContiguousManagedAppliedExecuteAt(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt, redundantBefore);
                 TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
                 if (maxContiguousApplied != null)
                     applyTo = maxContiguousApplied.executeAt;
