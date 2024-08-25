@@ -51,8 +51,7 @@ public class PackedKeyTracker
         if (routeSize < totalBits)
             return routeSize;
 
-        Invariants.checkState(routeSize <= DefaultProgressLogs.MAX_ROUTE_SIZE);
-        return (1 << (totalBits - 1)) / routeSize;
+        return Math.toIntExact((1L << (totalBits - 1)) / routeSize);
     }
 
     /**

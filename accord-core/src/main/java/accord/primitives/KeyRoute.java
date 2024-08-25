@@ -18,7 +18,6 @@
 
 package accord.primitives;
 
-import accord.impl.progresslog.DefaultProgressLogs;
 import accord.utils.Invariants;
 
 import accord.api.RoutingKey;
@@ -36,7 +35,6 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     {
         super(keys);
         this.homeKey = Invariants.nonNull(homeKey);
-        Invariants.checkState(keys.length <= DefaultProgressLogs.MAX_ROUTE_SIZE);
     }
 
     @Override

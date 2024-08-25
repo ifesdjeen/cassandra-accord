@@ -19,7 +19,6 @@
 package accord.primitives;
 
 import accord.api.RoutingKey;
-import accord.impl.progresslog.DefaultProgressLogs;
 import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
@@ -35,7 +34,6 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     {
         super(ranges);
         this.homeKey = Invariants.nonNull(homeKey);
-        Invariants.checkState(ranges.length <= DefaultProgressLogs.MAX_ROUTE_SIZE);
     }
 
     @Override

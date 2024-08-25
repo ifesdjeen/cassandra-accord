@@ -25,15 +25,11 @@ import accord.api.ProgressLog;
 import accord.local.CommandStore;
 import accord.local.Node;
 
-import static accord.impl.progresslog.BaseTxnState.WAITING_AWAIT_BITS;
-
 // TODO (desired, consider): consider propagating invalidations in the same way as we do applied
 // TODO (expected): report transactions not making progress
 // TODO (required): evict to disk
 public class DefaultProgressLogs implements ProgressLog.Factory
 {
-    public static final int MAX_ROUTE_SIZE = 1 << (WAITING_AWAIT_BITS - 1);
-
     static boolean PAUSE_FOR_TEST = false;
     public static void unsafePauseForTesting(boolean pause) { PAUSE_FOR_TEST = pause; }
 

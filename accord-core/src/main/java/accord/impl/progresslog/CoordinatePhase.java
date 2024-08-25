@@ -21,13 +21,14 @@ package accord.impl.progresslog;
 // the phase of the distributed state machine
 enum CoordinatePhase
 {
-    NotInitialisedOrDone,
+    NotInitialised,
     // not durably decided
     Undecided,
     // durably decided, but replicas may not be ready to execute
     AwaitReadyToExecute,
     // some replicas of all shards ready to execute
-    ReadyToExecute;
+    ReadyToExecute,
+    Done;
 
     private static final CoordinatePhase[] lookup = values();
 

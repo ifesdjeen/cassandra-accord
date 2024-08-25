@@ -53,7 +53,6 @@ import org.agrona.collections.ObjectHashSet;
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.HomeShard.Unsure;
 import static accord.impl.progresslog.CoordinatePhase.AwaitReadyToExecute;
-import static accord.impl.progresslog.CoordinatePhase.NotInitialisedOrDone;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.Undecided;
 import static accord.impl.progresslog.Progress.Awaiting;
@@ -145,11 +144,6 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         return result;
     }
 
-    TxnState ensure(TxnId txnId, TxnState state)
-    {
-        return state != null ? state : ensure(txnId);
-    }
-
     ProgressToken savedProgressToken(TxnId txnId)
     {
         ProgressToken saved = BTree.<TxnId, SavedProgressToken>find(progressTokenMap, (id, e) -> id.compareTo(e.txnId), txnId);
@@ -232,12 +226,12 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             switch (command.saveStatus())
             {
                 case ReadyToExecute:
-                    if (state.home().phase() != NotInitialisedOrDone) // if home, will have been initialised by commit
+                    if (state.isHomeInitialised()) // if home, will have been initialised by commit
                         state.home().atLeast(this, AwaitReadyToExecute, Queued);
                     break;
 
                 case Applied:
-                    if (state.home().phase() == NotInitialisedOrDone) clear(state);
+                    if (state.isHomeDoneOrUninitialised()) clear(state);
                     else state.setWaitingDoneAndMaybeRemove(this);
             }
         }

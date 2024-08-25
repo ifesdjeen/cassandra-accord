@@ -42,10 +42,6 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
  */
 abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<BaseTxnState>
 {
-    // TODO (expected): merge these two bit sets, so we can lose any size restrictions
-    static final int COORDINATE_AWAIT_BITS = 16;
-    static final int WAITING_AWAIT_BITS = 16;
-
     private static final int PENDING_TIMER_LOW_SHIFT = 48;
     private static final int PENDING_TIMER_LOW_BITS = 4; // can safely free up at least 6 bits here if we need some later
     private static final long PENDING_TIMER_LOW_MASK = (1 << PENDING_TIMER_LOW_BITS) - 1;
