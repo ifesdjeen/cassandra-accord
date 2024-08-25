@@ -52,6 +52,7 @@ import static accord.local.cfk.Utils.findCommit;
 import static accord.local.cfk.Utils.findFirstApply;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.selectUnmanaged;
+import static accord.primitives.Timestamp.max;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
 
@@ -244,19 +245,21 @@ abstract class PostProcess
 
         {
             Timestamp applyTo = null;
-            if (newInfo != null)
+            if (newInfo != null && newInfo.status == APPLIED)
             {
-                if (newInfo.status == APPLIED)
-                {
-                    TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
-                    if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
-                        applyTo = maxContiguousApplied.executeAt;
-                }
+                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
+                    applyTo = maxContiguousApplied.executeAt;
             }
-            else
+            else if (newInfo == null)
             {
-                applyTo = TxnId.nonNullOrMax(redundantBefore, bootstrappedAt);
+                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                if (maxContiguousApplied != null)
+                    applyTo = maxContiguousApplied.executeAt;
+                // if we're updating bootstrappedAt, we can fire anyone waiting on an executeAt before the bootstrappedAt
+                applyTo = Timestamp.nonNullOrMax(applyTo, TxnId.nonNullOrMax(redundantBefore, bootstrappedAt));
             }
+
             if (applyTo != null)
             {
                 int start = findFirstApply(unmanageds);

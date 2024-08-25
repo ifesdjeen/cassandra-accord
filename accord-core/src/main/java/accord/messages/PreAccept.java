@@ -122,12 +122,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply> implements
             default:
                 // we might hit 'Redundant' if we have to contact later epochs and partially re-contact a node we already contacted
                 // TODO (desired): consider dedicated special case, or rename
-                // TODO (desired): consider special-casing where status >= ACCEPTED
             case Redundant:
+            case Success:
                 if (command.saveStatus().compareTo(SaveStatus.PreAccepted) > 0)
                     return PreAcceptNack.INSTANCE;
 
-            case Success:
                 Ranges ranges = safeStore.ranges().allBetween(minEpoch, txnId);
                 Timestamp executeAt = command.executeAt();
                 PartialDeps deps = calculatePartialDeps(safeStore, txnId, command.partialTxn().keys(), scope, EpochSupplier.constant(minEpoch), txnId, ranges);
