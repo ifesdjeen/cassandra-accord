@@ -63,7 +63,6 @@ import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.PreApplied;
-import static accord.local.Status.Truncated;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 

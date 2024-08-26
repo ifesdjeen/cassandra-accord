@@ -103,22 +103,6 @@ abstract class HomeState extends WaitingState
         }
     }
 
-    void durable(SafeCommandStore safeStore, DefaultProgressLog instance)
-    {
-        switch (phase())
-        {
-            default:
-                throw new IllegalStateException();
-            case NotInitialised:
-            case Undecided:
-            case AwaitReadyToExecute:
-            case ReadyToExecute:
-                setHomeDone(instance);
-            case Done:
-                maybeRemove(instance);
-        }
-    }
-
     void run(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         Invariants.checkState(!isHomeDoneOrUninitialised());

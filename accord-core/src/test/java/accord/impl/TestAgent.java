@@ -32,8 +32,8 @@ import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.impl.mock.MockStore;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommandStore;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
@@ -142,19 +142,19 @@ public class TestAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units)
+    public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }

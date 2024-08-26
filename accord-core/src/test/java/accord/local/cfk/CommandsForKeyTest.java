@@ -1027,19 +1027,19 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units)
+        public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
+        public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units)
         {
             return 0;
         }
 
         @Override
-        public long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
+        public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units)
         {
             return 0;
         }

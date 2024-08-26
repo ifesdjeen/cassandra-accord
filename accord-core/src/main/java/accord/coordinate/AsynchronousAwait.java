@@ -27,8 +27,6 @@ import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.SafeCommand;
-import accord.local.SafeCommandStore;
 import accord.messages.Await;
 import accord.messages.Await.AwaitOk;
 import accord.messages.Callback;

@@ -28,8 +28,8 @@ import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.impl.mock.Network;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommandStore;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
@@ -135,20 +135,20 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units)
+    public long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units)
     {
         // TODO (required): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         int retryDelay = Math.min(32, 1 << retryCount);
         return units.convert(retryDelay, SECONDS);

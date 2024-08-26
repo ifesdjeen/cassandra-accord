@@ -24,8 +24,8 @@ import java.util.concurrent.TimeUnit;
 
 import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
-import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
@@ -120,7 +120,7 @@ public interface Agent extends UncaughtExceptionListener
      *
      *  This should aim to prevent two home replicas from attempting to initiate coordination at the same time.
      */
-    long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units);
+    long attemptCoordinationDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units);
 
     /**
      *  This method permits implementations to configure a delay for waiting to attempt to progress the local
@@ -129,7 +129,7 @@ public interface Agent extends UncaughtExceptionListener
      *  This method should only attempt to minimise wasted work that would anyway be achieved by the transaction's
      *  coordinator, while ensuring prompt when the coordinator considers the transaction to be durable.
      */
-    long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units);
+    long seekProgressDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil blockedUntil, TimeUnit units);
 
     /**
      * When a peer is queries for a local state, asynchronous callbacks may be registered.
@@ -137,5 +137,5 @@ public interface Agent extends UncaughtExceptionListener
      * This method configures a retry timeout on the node querying its peer to renew any callback registrations
      * and re-query the local state.
      */
-    long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
+    long retryAwaitTimeout(Node node, SafeCommandStore safeStore, TxnId txnId, int retryCount, BlockedUntil retrying, TimeUnit units);
 }
