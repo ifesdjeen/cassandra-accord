@@ -53,7 +53,6 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
-import accord.utils.btree.BulkIterator;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
@@ -68,10 +67,11 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVELY_KNOWN;
 import static accord.local.cfk.PostProcess.notifyPreBootstrap;
 import static accord.local.cfk.Pruning.isWaitingOnPruned;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
+import static accord.local.cfk.Pruning.pruneById;
+import static accord.local.cfk.Pruning.prunedBeforeId;
 import static accord.local.cfk.Updating.insertOrUpdate;
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
-import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -84,8 +84,6 @@ import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.isParanoid;
 import static accord.utils.Invariants.testParanoia;
 import static accord.utils.SortedArrays.Search.FAST;
-import static accord.utils.btree.BTree.Dir.ASC;
-import static accord.utils.btree.UpdateFunction.noOp;
 
 /**
  * REMEMBER AT ALL TIMES WHEN MODIFYING.
@@ -252,6 +250,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         {
             return reconstruct(key, redundantBefore, txns, prunedBefore, unmanageds);
         }
+    }
+
+    interface Updater<O>
+    {
+        O update(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds);
     }
 
     /**
@@ -1109,12 +1112,10 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
 
     static CommandsForKey reconstruct(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
     {
-        CommandsForKeyUpdate update = reconstructAndUpdateUnmanaged(key, redundantBefore, bootstrappedAt, byId, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds);
-        Invariants.checkState(update.getClass() == CommandsForKey.class);
-        return update.cfk();
+        return reconstruct(key, redundantBefore, bootstrappedAt, byId, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds, CommandsForKey::new);
     }
 
-    static CommandsForKeyUpdate reconstructAndUpdateUnmanaged(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
+    static <O> O reconstruct(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds, Updater<O> updater)
     {
         int countCommitted = 0;
         int minUndecidedById = -1;
@@ -1142,6 +1143,16 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
                 break;
         }
 
+        return updater.update(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds);
+    }
+
+    static CommandsForKeyUpdate reconstructAndUpdateUnmanaged(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
+    {
+        return reconstruct(key, redundantBefore, bootstrappedAt, byId, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds, CommandsForKey::updateAndNotifyUnmanageds);
+    }
+
+    static CommandsForKeyUpdate updateAndNotifyUnmanageds(Key key, TxnId redundantBefore, TxnId bootstrappedAt, TxnInfo[] byId, TxnInfo[] committedByExecuteAt, int minUndecidedById, int maxAppliedWriteByExecuteAt, Object[] loadingPruned, int newPrunedBeforeById, TxnId safelyPrunedBefore, Unmanaged[] unmanageds)
+    {
         return updateAndNotifyUnmanageds(key, redundantBefore, bootstrappedAt, byId, committedByExecuteAt, minUndecidedById, maxAppliedWriteByExecuteAt, loadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds, null, null);
     }
 
@@ -1388,10 +1399,17 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
             case Read:
                 return (int) (unappliedCounters >>> 32);
         }
-
     }
 
     public CommandsForKeyUpdate withRedundantBeforeAtLeast(RedundantBefore.Entry newRedundantBeforeEntry)
+    {
+        return withRedundantBeforeAtLeast(newRedundantBeforeEntry, false);
+    }
+
+    /**
+     * Use force=true on load from disk to ensure any notifications that may be needed after an out-of-band truncation are run.
+     */
+    public CommandsForKeyUpdate withRedundantBeforeAtLeast(RedundantBefore.Entry newRedundantBeforeEntry, boolean force)
     {
         /*
          * We cannot use locallyDecidedAndAppliedOrInvalidatedBefore to GC because until it has been applied everywhere
@@ -1402,49 +1420,44 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
         TxnId newRedundantBefore = newRedundantBeforeEntry.shardAppliedOrInvalidatedBefore;
         TxnId newBootstrappedAt = newRedundantBeforeEntry.bootstrappedAt;
         if (newBootstrappedAt.compareTo(newRedundantBefore) <= 0) newBootstrappedAt = null;
-        if (newRedundantBefore.equals(redundantBefore) && Objects.equals(newBootstrappedAt, bootstrappedAt))
+        return withRedundantBeforeAtLeast(newRedundantBefore, newBootstrappedAt, newRedundantBeforeEntry.locallyDecidedAndAppliedOrInvalidatedBefore, force);
+    }
+
+    /**
+     * Permits out-of-band truncation of CommandsForKey (i.e. on another thread touching only storage) so that we do not
+     * notify any commands. Correctness largely relies on the fact that the full withRedundantBeforeAtLeast will be invoked
+     * on load and not no-op due to e.g. newSafelyPrunedBefore or newBootstrappedAt being non-null.
+     */
+    @VisibleForImplementation
+    public CommandsForKey withRedundantBeforeAtLeast(TxnId newRedundantBefore)
+    {
+        /*
+         * We cannot use locallyDecidedAndAppliedOrInvalidatedBefore to GC because until it has been applied everywhere
+         * it cannot safely e substituted for earlier transactions as a dependency.
+         *
+         * However, it can be safely used as a prune lower bound that we know we do not need to go to disk to load.
+         */
+        TxnId newBootstrappedAt = bootstrappedAt;
+        if (newBootstrappedAt != null && newBootstrappedAt.compareTo(newRedundantBefore) <= 0) newBootstrappedAt = null;
+
+        TxnInfo[] newById = pruneById(byId, redundantBefore, bootstrappedAt, newRedundantBefore, newBootstrappedAt);
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
+
+        return reconstruct(key, newRedundantBefore, newBootstrappedAt, newById, newLoadingPruned, newPrunedBeforeById, safelyPrunedBefore, unmanageds);
+    }
+
+    // WARNING: if updating newBootstrappedAt to something non-null we need to invoke notifyPreBootstrap and return a CFKUpdate
+    private CommandsForKeyUpdate withRedundantBeforeAtLeast(TxnId newRedundantBefore, TxnId newBootstrappedAt, TxnId newSafelyPrunedBefore, boolean force)
+    {
+        if (!force && newRedundantBefore.equals(redundantBefore) && Objects.equals(newBootstrappedAt, bootstrappedAt) && newSafelyPrunedBefore.equals(this.safelyPrunedBefore))
             return this;
 
-        Invariants.checkArgument(newRedundantBefore.compareTo(redundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
-        Invariants.checkArgument(bootstrappedAt == null || newRedundantBefore.compareTo(bootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(bootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
+        TxnInfo[] newById = pruneById(byId, redundantBefore, bootstrappedAt, newRedundantBefore, newBootstrappedAt);
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
 
-        TxnInfo[] newById = byId;
-        int pos = insertPos(newRedundantBefore);
-        if (pos != 0)
-        {
-            if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
-            {
-                int startPos = bootstrappedAt == null ? 0 : insertPos(bootstrappedAt);
-                for (int i = startPos ; i < pos ; ++i)
-                    Invariants.checkState(byId[i].status != COMMITTED, "%s expected to be applied or undecided, as marked redundant", byId[i]);
-            }
-
-            newById = Arrays.copyOfRange(byId, pos, byId.length);
-            for (int i = 0 ; i < newById.length ; ++i)
-            {
-                TxnInfo txn = newById[i];
-                TxnId[] missing = txn.missing();
-                if (missing == NO_TXNIDS) continue;
-                missing = removeRedundantMissing(missing, newRedundantBefore);
-                newById[i] = txn.update(missing);
-            }
-        }
-
-        int newPrunedBeforeById;
-        if (prunedBefore().compareTo(newRedundantBefore) <= 0) newPrunedBeforeById = -1;
-        else newPrunedBeforeById = Arrays.binarySearch(newById, prunedBefore());
-
-        Object[] newLoadingPruned = loadingPruned;
-        int newLoadingPrunedLowBound = BTree.findIndex(loadingPruned, TxnId::compareTo, newRedundantBefore);
-        if (newLoadingPrunedLowBound < 0) newLoadingPrunedLowBound = -1 - newLoadingPrunedLowBound;
-        if (newLoadingPrunedLowBound > 0)
-        {
-            int size = BTree.size(loadingPruned);
-            newLoadingPruned = BTree.build(BulkIterator.of(BTree.iterator(loadingPruned, newLoadingPrunedLowBound, size, ASC)), size - newLoadingPrunedLowBound, noOp());
-        }
-
-        CommandsForKeyUpdate result = reconstructAndUpdateUnmanaged(key, newRedundantBefore, newBootstrappedAt, newById, newLoadingPruned, newPrunedBeforeById, newRedundantBeforeEntry.locallyDecidedAndAppliedOrInvalidatedBefore, unmanageds);
-        return notifyPreBootstrap(result);
+        return notifyPreBootstrap(reconstructAndUpdateUnmanaged(key, newRedundantBefore, newBootstrappedAt, newById, newLoadingPruned, newPrunedBeforeById, newSafelyPrunedBefore, unmanageds));
     }
 
     /**
@@ -1463,6 +1476,11 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     }
 
     int insertPos(Timestamp timestamp)
+    {
+        return insertPos(byId, timestamp);
+    }
+
+    static int insertPos(TxnInfo[] byId, Timestamp timestamp)
     {
         int i = Arrays.binarySearch(byId, 0, byId.length, timestamp);
         if (i < 0) i = -1 -i;

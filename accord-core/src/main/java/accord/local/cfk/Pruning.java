@@ -28,14 +28,24 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
+import accord.utils.btree.BulkIterator;
 import accord.utils.btree.UpdateFunction;
 
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED;
+import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
+import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.Pruning.LoadingPruned.LOADINGF;
+import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.TxnId.NO_TXNIDS;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
+import static accord.utils.Invariants.Paranoia.LINEAR;
+import static accord.utils.Invariants.Paranoia.NONE;
+import static accord.utils.Invariants.ParanoiaCostFactor.LOW;
+import static accord.utils.Invariants.testParanoia;
+import static accord.utils.btree.BTree.Dir.ASC;
+import static accord.utils.btree.UpdateFunction.noOp;
 
 public class Pruning
 {
@@ -352,5 +362,55 @@ public class Pruning
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         Invariants.checkState(newById[retainCount] == newPrunedBefore);
         return new CommandsForKey(cfk.key, cfk.redundantBefore, cfk.bootstrappedAt, newById, newCommittedByExecuteAt, minUndecidedById, newMaxAppliedWriteByExecuteAt, cfk.loadingPruned, retainCount, cfk.safelyPrunedBefore, cfk.unmanageds);
+    }
+
+    static TxnInfo[] pruneById(TxnInfo[] byId, TxnId redundantBefore, TxnId bootstrappedAt, TxnId newRedundantBefore, TxnId newBootstrappedAt)
+    {
+        Invariants.checkArgument(newRedundantBefore.compareTo(redundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
+        Invariants.checkArgument(bootstrappedAt == null || newRedundantBefore.compareTo(bootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(bootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
+
+        TxnInfo[] newById = byId;
+        int pos = insertPos(byId, newRedundantBefore);
+        if (pos != 0)
+        {
+            if (Invariants.isParanoid() && testParanoia(LINEAR, NONE, LOW))
+            {
+                int startPos = bootstrappedAt == null ? 0 : insertPos(byId, bootstrappedAt);
+                for (int i = startPos ; i < pos ; ++i)
+                    Invariants.checkState(byId[i].status != COMMITTED, "%s expected to be applied or undecided, as marked redundant", byId[i]);
+            }
+
+            newById = Arrays.copyOfRange(byId, pos, byId.length);
+            for (int i = 0 ; i < newById.length ; ++i)
+            {
+                TxnInfo txn = newById[i];
+                TxnId[] missing = txn.missing();
+                if (missing == NO_TXNIDS) continue;
+                missing = removeRedundantMissing(missing, newRedundantBefore);
+                newById[i] = txn.update(missing);
+            }
+        }
+        return newById;
+    }
+
+    static int prunedBeforeId(TxnInfo[] byId, TxnId prunedBefore, TxnId newRedundantBefore)
+    {
+        if (prunedBefore.compareTo(newRedundantBefore) <= 0)
+            return -1;
+
+        int i = Arrays.binarySearch(byId, prunedBefore);
+        Invariants.checkState(i >= 0);
+        return i;
+    }
+
+    static Object[] removeRedundantLoadingPruned(Object[] loadingPruned, TxnId newRedundantBefore)
+    {
+        int newLoadingPrunedLowBound = BTree.findIndex(loadingPruned, TxnId::compareTo, newRedundantBefore);
+        if (newLoadingPrunedLowBound < 0) newLoadingPrunedLowBound = -1 - newLoadingPrunedLowBound;
+        if (newLoadingPrunedLowBound <= 0)
+            return loadingPruned;
+
+        int size = BTree.size(loadingPruned);
+        return BTree.build(BulkIterator.of(BTree.iterator(loadingPruned, newLoadingPrunedLowBound, size, ASC)), size - newLoadingPrunedLowBound, noOp());
     }
 }
