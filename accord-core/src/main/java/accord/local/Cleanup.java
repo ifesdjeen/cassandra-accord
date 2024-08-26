@@ -18,7 +18,6 @@
 
 package accord.local;
 
-import accord.coordinate.Invalidate;
 import accord.local.Status.Durability;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Route;
