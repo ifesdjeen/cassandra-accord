@@ -33,8 +33,8 @@ import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
-import accord.primitives.PartialRoute;
 import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -51,7 +51,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 {
     public static class SerializerSupport
     {
-        public static Accept create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, PartialDeps partialDeps)
+        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, PartialDeps partialDeps)
         {
             return new Accept(txnId, scope, waitForEpoch, minEpoch, ballot, executeAt, keys, partialDeps);
         }
@@ -71,7 +71,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         this.partialDeps = deps.intersecting(scope);
     }
 
-    private Accept(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, PartialDeps partialDeps)
+    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Ballot ballot, Timestamp executeAt, Seekables<?, ?> keys, PartialDeps partialDeps)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.ballot = ballot;

@@ -25,8 +25,8 @@ import accord.local.Node.Id;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
-import accord.primitives.PartialRoute;
 import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -40,7 +40,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
 {
     public static final class SerializationSupport
     {
-        public static GetEphemeralReadDeps create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, long executionEpoch)
+        public static GetEphemeralReadDeps create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, long executionEpoch)
         {
             return new GetEphemeralReadDeps(txnId, scope, waitForEpoch, minEpoch, keys, executionEpoch);
         }
@@ -56,7 +56,7 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
         this.executionEpoch = executionEpoch;
     }
 
-    protected GetEphemeralReadDeps(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
+    protected GetEphemeralReadDeps(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.keys = keys;

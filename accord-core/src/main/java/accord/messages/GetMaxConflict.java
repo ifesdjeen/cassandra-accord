@@ -24,8 +24,8 @@ import accord.local.KeyHistory;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
-import accord.primitives.PartialRoute;
 import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -36,7 +36,7 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
 {
     public static final class SerializationSupport
     {
-        public static GetMaxConflict create(PartialRoute<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, long executionEpoch)
+        public static GetMaxConflict create(Route<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, long executionEpoch)
         {
             return new GetMaxConflict(scope, waitForEpoch, minEpoch, keys, executionEpoch);
         }
@@ -52,7 +52,7 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
         this.executionEpoch = executionEpoch;
     }
 
-    protected GetMaxConflict(PartialRoute<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
+    protected GetMaxConflict(Route<?> scope, long waitForEpoch, long minEpoch,  Seekables<?, ?> keys, long executionEpoch)
     {
         super(TxnId.NONE, scope, waitForEpoch, minEpoch);
         this.keys = keys;

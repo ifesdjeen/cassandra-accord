@@ -26,7 +26,6 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.Status;
 import accord.local.Status.Durability;
-import accord.primitives.PartialRoute;
 import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -39,7 +38,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
 {
     public static class SerializationSupport
     {
-        public static InformDurable create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, Timestamp executeAt, Durability durability)
+        public static InformDurable create(TxnId txnId, Route<?> scope, long waitForEpoch, Timestamp executeAt, Durability durability)
         {
             return new InformDurable(txnId, scope, waitForEpoch, executeAt, durability);
         }
@@ -55,7 +54,7 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
         this.durability = durability;
     }
 
-    private InformDurable(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, @Nullable Timestamp executeAt, Durability durability)
+    private InformDurable(TxnId txnId, Route<?> scope, long waitForEpoch, @Nullable Timestamp executeAt, Durability durability)
     {
         super(txnId, scope, waitForEpoch);
         this.executeAt = executeAt;

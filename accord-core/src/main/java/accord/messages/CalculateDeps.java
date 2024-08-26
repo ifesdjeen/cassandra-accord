@@ -25,8 +25,8 @@ import accord.local.Node.Id;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
-import accord.primitives.PartialRoute;
 import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -40,7 +40,7 @@ public class CalculateDeps extends TxnRequest.WithUnsynced<PartialDeps>
 {
     public static final class SerializationSupport
     {
-        public static CalculateDeps create(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, Timestamp executeAt)
+        public static CalculateDeps create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, Timestamp executeAt)
         {
             return new CalculateDeps(txnId, scope, waitForEpoch, minEpoch, keys, executeAt);
         }
@@ -56,7 +56,7 @@ public class CalculateDeps extends TxnRequest.WithUnsynced<PartialDeps>
         this.executeAt = executeAt;
     }
 
-    protected CalculateDeps(TxnId txnId, PartialRoute<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, Timestamp executeAt)
+    protected CalculateDeps(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Seekables<?, ?> keys, Timestamp executeAt)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.keys = keys;
