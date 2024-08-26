@@ -108,19 +108,19 @@ public class MaelstromAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(TxnId txnId, CommandStore commandStore, TimeUnit units)
+    public long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long seekProgressDelay(int retryCount, TxnId txnId, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         return units.convert(1L, SECONDS);
     }

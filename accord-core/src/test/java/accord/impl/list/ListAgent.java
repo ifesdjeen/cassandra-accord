@@ -21,6 +21,7 @@ package accord.impl.list;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.IntSupplier;
 
 import accord.api.Agent;
 import accord.api.ProgressLog;
@@ -50,14 +51,18 @@ public class ListAgent implements Agent
     final Consumer<Throwable> onFailure;
     final Consumer<Runnable> retryBootstrap;
     final BiConsumer<Timestamp, Ranges> onStale;
+    final IntSupplier coordinationDelays;
+    final IntSupplier progressDelays;
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale)
+    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays)
     {
         this.rnd = rnd;
         this.timeout = timeout;
         this.onFailure = onFailure;
         this.retryBootstrap = retryBootstrap;
         this.onStale = onStale;
+        this.coordinationDelays = coordinationDelays;
+        this.progressDelays = progressDelays;
     }
 
     @Override
@@ -130,20 +135,20 @@ public class ListAgent implements Agent
     }
 
     @Override
-    public long attemptCoordinationDelay(TxnId txnId, CommandStore commandStore, TimeUnit units)
+    public long attemptCoordinationDelay(Node node, CommandStore commandStore, TxnId txnId, TimeUnit units)
     {
         // TODO (required): meta randomise
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long seekProgressDelay(int retryCount, TxnId txnId, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
+    public long seekProgressDelay(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil blockedUntil, TimeUnit units)
     {
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 
     @Override
-    public long retryAwaitTimeout(int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
+    public long retryAwaitTimeout(Node node, CommandStore commandStore, TxnId txnId, int retryCount, ProgressLog.BlockedUntil retrying, TimeUnit units)
     {
         int retryDelay = Math.min(32, 1 << retryCount);
         return units.convert(retryDelay, SECONDS);

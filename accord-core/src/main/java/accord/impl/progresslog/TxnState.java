@@ -51,15 +51,15 @@ final class TxnState extends HomeState
                 {
                     default: throw new AssertionError("Unhandled TxnStateKind: " + updated);
                     case Waiting:
-                        newDelay = instance.commandStore.agent().seekProgressDelay(retryCounter(), txnId, blockedUntil, MICROSECONDS);
+                        newDelay = instance.commandStore.agent().seekProgressDelay(instance.node, instance.commandStore, txnId, retryCounter(), blockedUntil, MICROSECONDS);
                         break;
                     case Home:
-                        newDelay = instance.commandStore.agent().attemptCoordinationDelay(txnId, instance.commandStore, MICROSECONDS);
+                        newDelay = instance.commandStore.agent().attemptCoordinationDelay(instance.node, instance.commandStore, txnId, MICROSECONDS);
                 }
                 Invariants.checkState(newDelay > 0);
                 break;
             case Awaiting:
-                newDelay = instance.commandStore.agent().retryAwaitTimeout(retryCounter(), blockedUntil, MICROSECONDS);
+                newDelay = instance.commandStore.agent().retryAwaitTimeout(instance.node, instance.commandStore, txnId, retryCounter(), blockedUntil, MICROSECONDS);
                 Invariants.checkState(newDelay > 0);
                 break;
         }

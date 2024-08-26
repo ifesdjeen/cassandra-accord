@@ -300,6 +300,7 @@ public class Cluster implements Scheduler
         run.run();
     }
 
+    // TODO (expected): merge with BurnTest.burn
     public static Map<MessageType, Cluster.Stats> run(Supplier<RandomSource> randomSupplier,
                                                       List<Node.Id> nodes,
                                                       Topology initialTopology,
@@ -307,12 +308,20 @@ public class Cluster implements Scheduler
     {
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
         PropagatingPendingQueue queue = new PropagatingPendingQueue(failures, new RandomDelayQueue(randomSupplier.get()));
-        RandomSource retryRandom = randomSupplier.get();
-        Consumer<Runnable> retryBootstrap = retry -> {
-            long delay = retryRandom.nextInt(1, 15);
-            queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
-        };
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale);
+        Consumer<Runnable> retryBootstrap;
+        {
+            RandomSource rnd = randomSupplier.get();
+            retryBootstrap = retry -> {
+                long delay = rnd.nextInt(1, 15);
+                queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
+            };
+        }
+        IntSupplier coordinationDelays, progressDelays;
+        {
+            RandomSource rnd = randomSupplier.get();
+            progressDelays = coordinationDelays = () -> rnd.nextInt(100, 1000);
+        }
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays);
         RandomSource nowRandom = randomSupplier.get();
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = nowRandom.fork();
@@ -326,8 +335,8 @@ public class Cluster implements Scheduler
                                      .asLongSupplier(forked);
         };
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
-            throw new IllegalAccessError("Global executor should enver get a stale event");
-        }));
+            throw new IllegalAccessError("Global executor should never get a stale event");
+        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }));
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override

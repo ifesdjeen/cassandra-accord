@@ -320,12 +320,21 @@ public class BurnTest
         PropagatingPendingQueue queue = new PropagatingPendingQueue(failures, delayQueue);
         long startNanos = System.nanoTime();
         long startLogicalMillis = queue.nowInMillis();
-        RandomSource retryRandom = random.fork();
-        Consumer<Runnable> retryBootstrap = retry -> {
-            long delay = retryRandom.nextInt(1, 15);
-            queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
-        };
-        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale);
+        Consumer<Runnable> retryBootstrap;
+        {
+            RandomSource retryRandom = random.fork();
+            retryBootstrap = retry -> {
+                long delay = retryRandom.nextInt(1, 15);
+                queue.add((PendingRunnable) retry::run, delay, TimeUnit.SECONDS);
+            };
+        }
+        IntSupplier coordinationDelays, progressDelays;
+        {
+            RandomSource rnd = random.fork();
+            coordinationDelays = delayGenerator(rnd, 1, 100, 100, 1000);
+            progressDelays = delayGenerator(rnd, 1, 100, 100, 1000);
+        }
+        Function<BiConsumer<Timestamp, Ranges>, ListAgent> agentSupplier = onStale -> new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays);
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -341,7 +350,7 @@ public class BurnTest
 
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
             throw new IllegalAccessError("Global executor should enver get a stale event");
-        }));
+        }, coordinationDelays, progressDelays));
         Int2ObjectHashMap<Verifier> validators = new Int2ObjectHashMap<>();
         Function<CommandStore, AsyncExecutor> executor = ignore -> globalExecutor;
 
@@ -497,6 +506,18 @@ public class BurnTest
             if (clock.get() != operations * 2) throw new AssertionError("Incomplete set of responses; clock=" + clock.get() + ", expected operations=" + (operations * 2));
             else throw new AssertionError("Incomplete set of responses; ack+recovered+other+nacks+lost+truncated=" + observedOperations + ", expected operations=" + (operations * 2));
         }
+    }
+
+    private static IntSupplier delayGenerator(RandomSource rnd, int absoluteMin, int absoluteMaxMin, int absoluteMinMax, int asoluteMax)
+    {
+        int minDelay = rnd.nextInt(absoluteMin, absoluteMaxMin);
+        int maxDelay = rnd.nextInt(Math.max(absoluteMinMax, minDelay), asoluteMax);
+        if (rnd.nextBoolean())
+        {
+            int medianDelay = rnd.nextInt(minDelay, maxDelay);
+            return () -> rnd.nextBiasedInt(minDelay, medianDelay, maxDelay);
+        }
+        return () -> rnd.nextInt(minDelay, maxDelay);
     }
 
     private static String statsInDescOrder(Map<MessageType, Stats> statsMap)
