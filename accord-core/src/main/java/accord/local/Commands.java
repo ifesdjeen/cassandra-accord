@@ -28,7 +28,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Key;
-import accord.api.ProgressLog.HomeShard;
 import accord.api.Result;
 import accord.coordinate.Infer;
 import accord.local.Command.WaitingOn;
@@ -53,8 +52,6 @@ import accord.utils.async.AsyncChains;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
-import static accord.api.ProgressLog.HomeShard.Home;
-import static accord.api.ProgressLog.HomeShard.No;
 import static accord.local.Cleanup.ERASE;
 import static accord.local.Cleanup.shouldCleanup;
 import static accord.local.Command.Truncated.erased;
@@ -134,7 +131,6 @@ public class Commands
         Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
         Ranges acceptRanges = acceptRanges(safeStore, txnId, acceptEpoch, coordinateRanges);
         Invariants.checkState(!acceptRanges.isEmpty());
-        HomeShard shard = homeShard(route, coordinateRanges);
         Invariants.checkState(validate(SaveStatus.PreAccepted, command, acceptRanges, route, partialTxn, null, null));
 
         // FIXME: this should go into a consumer method
@@ -148,7 +144,6 @@ public class Commands
             // invalidate any transactions that were not completed by their initial coordinator
             // TODO (desired): limit preaccept to keys we include, to avoid inflating unnecessary state
             Timestamp executeAt = safeStore.commandStore().preaccept(txnId, attrs.partialTxn().keys(), safeStore, ballot.equals(Ballot.ZERO));
-            safeStore.progressLog().preaccepted(txnId, shard);
             safeCommand.preaccept(safeStore, attrs, executeAt, ballot);
         }
         else
@@ -214,7 +209,6 @@ public class Commands
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
         Invariants.checkState(!acceptRanges.isEmpty());
 
-        HomeShard shard = homeShard(route, coordinateRanges);
         Invariants.checkState(validate(SaveStatus.Accepted, command, acceptRanges, route, null, partialDeps, null));
 
         // TODO (desired, clarity/efficiency): we don't need to set the route here, and perhaps we don't even need to
@@ -223,7 +217,6 @@ public class Commands
         CommonAttributes attrs = set(SaveStatus.Accepted, command, command, acceptRanges, ballot, route, null, partialDeps);
 
         keysOrRanges = keysOrRanges.slice(acceptRanges);
-        safeStore.progressLog().accepted(txnId, shard);
         safeCommand.accept(safeStore, keysOrRanges, attrs, executeAt, ballot);
         safeStore.notifyListeners(safeCommand, command);
 
@@ -303,7 +296,6 @@ public class Commands
 
         Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
-        HomeShard shard = homeShard(route, coordinateRanges);
 
         if (!validate(newStatus, command, acceptRanges, route, partialTxn, partialDeps, null))
             return CommitOutcome.Insufficient;
@@ -314,7 +306,6 @@ public class Commands
         final Command.Committed committed;
         if (newStatus == SaveStatus.Stable)
         {
-            safeStore.progressLog().stable(txnId, shard);
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, attrs, executeAt, attrs.route());
             committed = safeCommand.stable(safeStore, attrs, Ballot.max(command.acceptedOrCommitted(), ballot), executeAt, waitingOn);
             safeStore.agent().metricsEventsListener().onStable(committed);
@@ -459,7 +450,6 @@ public class Commands
 
         Ranges coordinateRanges = coordinateRanges(safeStore, txnId);
         Ranges acceptRanges = acceptRanges(safeStore, txnId, executeAt, coordinateRanges);
-        HomeShard shard = homeShard(route, coordinateRanges);
 
         if (!validate(SaveStatus.PreApplied, command, acceptRanges, route, partialTxn, partialDeps, safeStore))
             return ApplyOutcome.Insufficient; // TODO (expected, consider): this should probably be an assertion failure if !TrySet
@@ -468,7 +458,6 @@ public class Commands
 
         WaitingOn waitingOn = !command.hasBeen(Stable) ? initialiseWaitingOn(safeStore, txnId, attrs, executeAt, attrs.route()) : command.asCommitted().waitingOn();
 
-        safeStore.progressLog().preapplied(txnId, shard);
         safeCommand.preapplied(safeStore, attrs, executeAt, waitingOn, writes, result);
         logger.trace("{}: apply, status set to Executed with executeAt: {}, deps: {}", txnId, executeAt, partialDeps);
 
@@ -781,7 +770,7 @@ public class Commands
             {
                 TxnId nextWaitingOn = command.waitingOn().nextWaitingOn();
                 if (nextWaitingOn != null && nextWaitingOn.equals(pred.txnId()) && !pred.hasBeen(PreApplied))
-                    safeStore.progressLog().waiting(CanApply, predecessor, pred.route(), null);
+                    safeStore.progressLog().waiting(CanApply, safeStore, predecessor, pred.route(), null);
             }
         }
     }
@@ -925,13 +914,12 @@ public class Commands
         if (executeAt != null && command.status().hasBeen(Committed) && !command.executeAt().equals(executeAt))
             safeStore.agent().onInconsistentTimestamp(command, command.asCommitted().executeAt(), executeAt);
         attrs = attrs.mutable().durability(durability);
-        final Command updated = safeCommand.updateAttributes(attrs);
 
+        Command updated = safeCommand.updateAttributes(safeStore, attrs);
         if (maybeCleanup(safeStore, safeCommand, command, toEpoch, route))
-            return safeCommand.current();
+            updated = safeCommand.current();
 
         safeStore.notifyListeners(safeCommand, command);
-        safeStore.progressLog().durable(safeCommand);
         return updated;
     }
 
@@ -1045,7 +1033,7 @@ public class Commands
                             case PARTIALLY_PRE_BOOTSTRAP_OR_STALE:
                                 if (logger.isTraceEnabled()) logger.trace("{} blocked on {} until ReadyToExclude", waitingId, dep.txnId());
                                 safeStore.registerListener(depSafe, HasDecidedExecuteAt.minSaveStatus, Full, waitingId);
-                                safeStore.progressLog().waiting(HasDecidedExecuteAt, depSafe, null, participants);
+                                safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, null, participants);
                                 return;
 
                             case LOCALLY_REDUNDANT:
@@ -1068,13 +1056,13 @@ public class Commands
 
                         case NotReady:
                             safeStore.registerListener(depSafe, HasDecidedExecuteAt.minSaveStatus, Full, waitingId);
-                            safeStore.progressLog().waiting(HasDecidedExecuteAt, depSafe, dep.route(), null);
+                            safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, dep.route(), null);
                             return;
 
                         case ReadyToExclude:
                         case WaitingToExecute:
                         case ReadyToExecute:
-                            safeStore.progressLog().waiting(CanApply, depSafe, dep.route(), null);
+                            safeStore.progressLog().waiting(CanApply, safeStore, depSafe, dep.route(), null);
 
                         case Applying:
                             safeStore.registerListener(depSafe, SaveStatus.Applied, Full, waitingId);
@@ -1148,13 +1136,7 @@ public class Commands
         if (route == null)
             return;
 
-        Ranges coordinateRanges = safeStore.ranges().allAt(command.txnId().epoch());
-        boolean isHomeShard = coordinateRanges.contains(route.homeKey());
-        if (isHomeShard)
-        {
-            safeCommand.updateAttributes(command.mutable().route(Route.merge((Route)route, command.route())));
-            safeStore.progressLog().unwitnessed(safeCommand.txnId(), Home);
-        }
+        safeCommand.updateAttributes(safeStore, command.mutable().route(Route.merge((Route)route, command.route())));
     }
 
     /**
@@ -1175,9 +1157,12 @@ public class Commands
         return command;
     }
 
-    public static Command updateRouteOrParticipants(SafeCommand safeCommand, Participants<?> participants)
+    public static Command updateRouteOrParticipants(SafeCommandStore safeStore, SafeCommand safeCommand, Unseekables<?> participants)
     {
         Command current = safeCommand.current();
+        if (current.hasBeen(Invalidated))
+            return current;
+
         CommonAttributes updated = current;
         if (Route.isRoute(participants))
         {
@@ -1187,18 +1172,13 @@ public class Commands
         {
             Route<?> existingRoute = current.route();
             if (existingRoute != null && !existingRoute.containsAll(participants))
-                updated = current.mutable().route(existingRoute.with((Participants) participants));
+                updated = current.mutable().route(existingRoute.with((Unseekables) participants));
         }
 
         if (current == updated)
             return current;
 
-        return safeCommand.updateAttributes(updated);
-    }
-
-    private static HomeShard homeShard(Route<?> route, Ranges coordinates)
-    {
-        return coordinates.contains(route.homeKey()) ? Home : No;
+        return safeCommand.updateAttributes(safeStore, updated);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

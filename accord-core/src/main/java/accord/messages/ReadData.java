@@ -199,8 +199,8 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
                 }
 
                 int c = status.compareTo(SaveStatus.Stable);
-                if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeCommand, null, readScope);
-                else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeCommand, null, readScope);
+                if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, readScope);
+                else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, readScope);
                 return status.compareTo(SaveStatus.Stable) >= 0 ? null : Insufficient;
 
             case OBSOLETE:

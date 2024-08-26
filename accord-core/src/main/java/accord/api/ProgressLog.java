@@ -40,25 +40,23 @@ import static accord.local.Status.Durability.NotDurable;
 import static accord.utils.SortedArrays.Search.FAST;
 
 /**
- * This interface is responsible for managing incomplete transactions *and retrying them*.
- * Each stage is fenced by two methods, one entry and one exit. The entry method notifies the implementation
- * that it should soon be notified of the exit method, and if it is not that it should invoke some
- * pre-specified recovery mechanism.
- *
- * This is a per-CommandStore structure, with transactions primarily being managed by their home shard,
- * except during PreAccept as a transaction may not yet have been durably recorded by the home shard.
+ * This interface is responsible for managing incomplete transactions and ensuring they complete.
+ * This includes both ensuring a transaction is coordinated (normally handled by the home shard only)
+ * and ensuring the local command store executes the transaction.
  *
  * The basic logical flow for ensuring a transaction is committed and applied at all replicas is as follows:
  *
- *  - Members of the home shard will be informed of a transaction to monitor by the invocation of {@link #preaccepted} or
- *    {@link #accepted}. If this is not followed closely by {@link #stable}, {@link accord.coordinate.MaybeRecover} should
- *    be invoked.
+ *  - Members of the home shard will be informed of a transaction to monitor. This happens as soon as the
+ *    home shard receives any Route. If this is not followed closely by {@link SaveStatus#Stable},
+ *    {@link accord.coordinate.MaybeRecover} should be invoked to ensure the transaction is decided and executed.
+ *
+ * TODO (now): finish rewriting description and port to DefaultProgressLog
  *
  *  - Non-home shards that have not witnessed an Accept phase or later should inform the home shard of the transaction.
  *    This can be done at any time. The default implementation does this only when the transaction is blocking the
  *    progress of some other transaction.
  *
- *  - If the {@code blockedBy} transaction is uncommitted it is required that the progress log invoke
+ *  - If a {@code blockedBy} transaction is uncommitted it is required that the progress log invoke
  *    {@link accord.coordinate.FetchData#fetch} for the transaction if no {@link #stable} is witnessed.
  *
  *  - Members of the home shard will later be informed that the transaction is {@link #readyToExecute}.
@@ -150,81 +148,10 @@ public interface ProgressLog
         }
     }
 
-    enum HomeShard
-    {
-        /* We do not have enough information to say whether the shard is a progress shard or not */
-        Unsure,
-
-        /**
-         * This shard is not a progress shard
-         */
-        No,
-
-        /* Designated Home (Global Progress) Shard (if local node is a replica of home key on coordination epoch) */
-        Home;
-
-        public boolean isHome() { return this == Home; }
-    }
-
-    /**
-     * Has not been pre-accepted, but has been witnessed by ourselves (only partially) or another node that has informed us
-     *
-     * A home shard should monitor this transaction for global progress.
-     * A non-home shard should not receive this message.
-     */
-    void unwitnessed(TxnId txnId, HomeShard shard);
-
-    /**
-     * Has been pre-accepted.
-     *
-     * A home shard should monitor this transaction for global progress.
-     * A non-home shard should begin monitoring this transaction only to ensure it reaches the Accept phase, or is
-     * witnessed by a majority of the home shard.
-     */
-    void preaccepted(TxnId txnId, HomeShard shard);
-
-    /**
-     * Has been accepted
-     *
-     * A home shard should monitor this transaction for global progress.
-     * A non-home shard can safely ignore this transaction, as it has been witnessed by a majority of the home shard.
-     */
-    void accepted(TxnId txnId, HomeShard shard);
-
-    /**
-     * Has stable dependencies, so should execute soon.
-     *
-     * A home shard should monitor this transaction for global progress.
-     * A non-home shard can safely ignore this transaction, as it has been witnessed by a majority of the home shard.
-     */
-    void stable(TxnId txnId, HomeShard shard);
-
-    /**
-     * The transaction's outcome has been durably recorded (but not necessarily applied) locally.
-     * It will be applied once all local dependencies have been.
-     *
-     * Invoked on both home and non-home command stores, and is required to trigger per-shard processes
-     * that ensure the transaction's outcome is durably persisted on all replicas of the shard.
-     *
-     * May also permit aborting a pending waitingOn-triggered event.
-     */
-    void preapplied(TxnId txnId, HomeShard shard);
-
-    /**
-     * The transaction's outcome has been durably recorded (but not necessarily applied) at a quorum of all shards.
-     *
-     * If this replica has not witnessed the outcome of the transaction, it should poll a majority of each shard
-     * for its outcome.
-     *
-     * Otherwise, this transaction no longer needs to be monitored, but implementations may wish to ensure that
-     * the result is propagated to every live replica.
-     */
-    void durable(SafeCommand safeCommand);
-
     /**
      * Record an updated local status for the transaction, to clear any waiting state it satisfies.
      */
-    void update(TxnId txnId, Command command);
+    void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after);
 
     void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from);
 
@@ -251,7 +178,7 @@ public interface ProgressLog
      * @param blockedOnRoute        the route (if any) we are blocked on execution for
      * @param blockedOnParticipants the participating keys on which we are blocked for execution
      */
-    void waiting(BlockedUntil blockedUntil, SafeCommand blockedBy, @Nullable Route<?> blockedOnRoute, @Nullable Participants<?> blockedOnParticipants);
+    void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, @Nullable Route<?> blockedOnRoute, @Nullable Participants<?> blockedOnParticipants);
 
     /**
      * We have finished processing this transaction; ensure its state is cleared
@@ -260,15 +187,9 @@ public interface ProgressLog
 
     class NoOpProgressLog implements ProgressLog
     {
-        @Override public void unwitnessed(TxnId txnId, HomeShard shard) {}
-        @Override public void preaccepted(TxnId txnId, HomeShard shard) {}
-        @Override public void accepted(TxnId txnId, HomeShard shard) {}
-        @Override public void stable(TxnId txnId, HomeShard shard) {}
-        @Override public void preapplied(TxnId txnId, HomeShard shard) {}
-        @Override public void durable(SafeCommand command) {}
-        @Override public void update(TxnId txnId, Command command) {}
+        @Override public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after) {}
         @Override public void remoteCallback(SafeCommandStore safeStore, SafeCommand safeCommand, SaveStatus remoteStatus, int callbackId, Node.Id from) {}
-        @Override public void waiting(BlockedUntil blockedUntil, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants) {}
+        @Override public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants) {}
         @Override public void clear(TxnId txnId) {}
     }
 }

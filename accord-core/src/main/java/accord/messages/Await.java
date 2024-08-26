@@ -122,8 +122,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             return null;
 
         // TODO (desired): consider merging these methods?
-        command = Commands.updateRouteOrParticipants(safeCommand, scope);
-        Commands.ensureHomeIsMonitoring(safeStore, safeCommand, command, scope);
+        command = Commands.updateRouteOrParticipants(safeStore, safeCommand, scope);
 
         if (callbackId >= 0)
         {
@@ -145,7 +144,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             safeStore.register(txnId, this);
         }
 
-        safeStore.progressLog().waiting(blockedUntil, safeCommand, null, scope);
+        safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, scope);
         return null;
     }
 
@@ -243,7 +242,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
             Command command = safeCommand.current();
             if (!Route.isFullRoute(command.route()))
-                safeCommand.updateAttributes(command.mutable().route(route));
+                safeCommand.updateAttributes(safeStore, command.mutable().route(route));
             safeStore.progressLog().remoteCallback(safeStore, safeCommand, newStatus, callbackId, from);
         }
     }

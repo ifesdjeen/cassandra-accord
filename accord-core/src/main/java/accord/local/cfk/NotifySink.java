@@ -103,7 +103,7 @@ interface NotifySink
             }
             else
             {
-                safeStore.progressLog().waiting(blockedUntil, safeCommand, null, RoutingKeys.of(key.toUnseekable()));
+                safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, RoutingKeys.of(key.toUnseekable()));
             }
         }
 

@@ -28,7 +28,8 @@ enum CoordinatePhase
     AwaitReadyToExecute,
     // some replicas of all shards ready to execute
     ReadyToExecute,
-    Done;
+    Done
+    ;
 
     private static final CoordinatePhase[] lookup = values();
 

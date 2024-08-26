@@ -1106,7 +1106,7 @@ public class CommandsForKey extends CommandsForKeyUpdate implements CommandsSumm
     static CommandsForKey reconstruct(Key key, TxnId redundantBefore, TxnInfo[] byId, TxnId prunedBefore, Unmanaged[] unmanageds)
     {
         int prunedBeforeById = Arrays.binarySearch(byId, prunedBefore);
-        Invariants.checkState(prunedBeforeById >= 0);
+        Invariants.checkState(prunedBeforeById >= 0 || prunedBefore.equals(TxnId.NONE));
         return reconstruct(key, redundantBefore, TxnId.NONE, byId, BTree.empty(), prunedBeforeById, TxnId.NONE, unmanageds);
     }
 

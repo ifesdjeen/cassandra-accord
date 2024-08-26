@@ -59,7 +59,7 @@ abstract class HomeState extends WaitingState
         super(txnId);
     }
 
-    void set(DefaultProgressLog instance, CoordinatePhase newCoordinatePhase, Progress newProgress)
+    void set(SafeCommandStore safeStore, DefaultProgressLog instance, CoordinatePhase newCoordinatePhase, Progress newProgress)
     {
         encodedState &= SET_MASK;
         encodedState |= ((long)newCoordinatePhase.ordinal() << COORDINATE_STATUS_SHIFT)
@@ -67,7 +67,7 @@ abstract class HomeState extends WaitingState
 
         if (newProgress == NoneExpected)
             instance.clearProgressToken(txnId);
-        updateScheduling(instance, Home, CanCoordinateExecution, newProgress);
+        updateScheduling(safeStore, instance, Home, CanCoordinateExecution, newProgress);
     }
 
     @Nonnull CoordinatePhase phase()
@@ -90,7 +90,7 @@ abstract class HomeState extends WaitingState
         return Progress.forOrdinal((int) ((encodedState >>> COORDINATE_PROGRESS_SHIFT) & COORDINATE_PROGRESS_MASK));
     }
 
-    void atLeast(DefaultProgressLog instance, CoordinatePhase newPhase, Progress newProgress)
+    void atLeast(SafeCommandStore safeStore, DefaultProgressLog instance, CoordinatePhase newPhase, Progress newProgress)
     {
         if (phase() == Done)
             return;
@@ -99,11 +99,11 @@ abstract class HomeState extends WaitingState
         {
             instance.clearActive(Home, txnId);
             clearRetryCounter();
-            set(instance, newPhase, newProgress);
+            set(safeStore, instance, newPhase, newProgress);
         }
     }
 
-    void durable(DefaultProgressLog instance)
+    void durable(SafeCommandStore safeStore, DefaultProgressLog instance)
     {
         switch (phase())
         {
@@ -131,7 +131,7 @@ abstract class HomeState extends WaitingState
 
         ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);
         MaybeRecover.maybeRecover(instance.node(), txnId, command.route(), maxProgressToken, invokeHomeCallback(instance, txnId, maxProgressToken, HomeState::recoverCallback));
-        set(instance, ReadyToExecute, Querying);
+        set(safeStore, instance, ReadyToExecute, Querying);
     }
 
     static void recoverCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog instance, TxnId txnId, @Nullable ProgressToken prevProgressToken, Outcome success, Throwable fail)
@@ -145,7 +145,7 @@ abstract class HomeState extends WaitingState
         {
             if (fail != null)
             {
-                state.set(instance, status, Queued);
+                state.set(safeStore, instance, status, Queued);
             }
             else
             {
@@ -162,7 +162,7 @@ abstract class HomeState extends WaitingState
                 {
                     if (prevProgressToken != null && token.compareTo(command) > 0)
                         instance.saveProgressToken(command.txnId(), token);
-                    state.set(instance, status, Queued);
+                    state.set(safeStore, instance, status, Queued);
                 }
             }
         }
@@ -170,12 +170,12 @@ abstract class HomeState extends WaitingState
 
     void setHomeDone(DefaultProgressLog instance)
     {
-        set(instance, Done, NoneExpected);
+        set(null, instance, Done, NoneExpected);
         clearRetryCounter();
         instance.clearActive(Home, txnId);
     }
 
-    private void setHomeDoneAnyMaybeRemove(DefaultProgressLog instance)
+    void setHomeDoneAnyMaybeRemove(DefaultProgressLog instance)
     {
         setHomeDone(instance);
         maybeRemove(instance);

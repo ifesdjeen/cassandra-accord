@@ -21,6 +21,7 @@ package accord.impl.progresslog;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
@@ -204,7 +205,7 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
         return isInHeap();
     }
 
-    abstract void updateScheduling(DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil awaiting, Progress newProgress);
+    abstract void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil awaiting, Progress newProgress);
 
     abstract void maybeRemove(DefaultProgressLog instance);
 }

@@ -59,7 +59,7 @@ public abstract class SafeCommand
             return update;
 
         set(update);
-        safeStore.progressLog().update(txnId, update);
+        safeStore.progressLog().update(safeStore, txnId, prev, update);
         safeStore.update(prev, update);
         return update;
     }
@@ -78,9 +78,12 @@ public abstract class SafeCommand
         return incidentalUpdate(Command.updateWaitingOn(current().asCommitted(), waitingOn));
     }
 
-    public Command updateAttributes(CommonAttributes attrs)
+    public Command updateAttributes(SafeCommandStore safeStore, CommonAttributes attrs)
     {
-        return incidentalUpdate(current().updateAttributes(attrs));
+        Command prev = current();
+        Command update = incidentalUpdate(prev.updateAttributes(attrs));
+        safeStore.progressLog().update(safeStore, txnId, prev, update);
+        return update;
     }
 
     public Command.PreAccepted preaccept(SafeCommandStore safeStore, CommonAttributes attrs, Timestamp executeAt, Ballot ballot)

@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 import com.google.common.primitives.Ints;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.local.SafeCommandStore;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
@@ -35,7 +36,7 @@ final class TxnState extends HomeState
         super(txnId);
     }
 
-    void updateScheduling(DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil blockedUntil, Progress newProgress)
+    void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil blockedUntil, Progress newProgress)
     {
         long newDelay;
         switch (newProgress)

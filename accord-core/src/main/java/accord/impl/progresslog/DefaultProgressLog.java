@@ -29,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
+import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -51,7 +52,6 @@ import org.agrona.collections.Object2ObjectHashMap;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
-import static accord.api.ProgressLog.HomeShard.Unsure;
 import static accord.impl.progresslog.CoordinatePhase.AwaitReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
 import static accord.impl.progresslog.CoordinatePhase.Undecided;
@@ -62,8 +62,8 @@ import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
-import static accord.local.Status.Applied;
 import static accord.local.Status.PreApplied;
+import static accord.local.Status.Truncated;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -144,6 +144,15 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         return result;
     }
 
+    private TxnState insert(TxnId txnId)
+    {
+        Invariants.checkState(deleted == null || !deleted.containsKey(txnId));
+        node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, 1);
+        TxnState result = new TxnState(txnId);
+        stateMap = BTree.update(stateMap, BTree.singleton(result), TxnState::compareTo);
+        return result;
+    }
+
     ProgressToken savedProgressToken(TxnId txnId)
     {
         ProgressToken saved = BTree.<TxnId, SavedProgressToken>find(progressTokenMap, (id, e) -> id.compareTo(e.txnId), txnId);
@@ -168,71 +177,76 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void unwitnessed(TxnId txnId, HomeShard shard)
-    {
-        if (shard.isHome())
-            ensure(txnId).home().atLeast(this, Undecided, Queued);
-    }
-
-    @Override
-    public void preaccepted(TxnId txnId, HomeShard shard)
-    {
-        Invariants.checkState(shard != Unsure);
-
-        if (shard.isHome())
-            ensure(txnId).home().atLeast(this, Undecided, Queued);
-    }
-
-    @Override
-    public void accepted(TxnId txnId, HomeShard shard)
-    {
-        if (shard.isHome())
-            ensure(txnId).home().atLeast(this, Undecided, Queued);
-    }
-
-
-    @Override
-    public void stable(TxnId txnId, HomeShard shard)
-    {
-        Invariants.checkState(shard != Unsure);
-        if (shard.isHome())
-        {
-            // CoordinatePhase.Stable implies the whole distributed state machine is durably Stable,
-            // so here we only ensure we are monitoring this transaction and have it marked as Stable
-            ensure(txnId).home().atLeast(this, Undecided, NoneExpected);
-        }
-    }
-
-    @Override
-    public void preapplied(TxnId txnId, HomeShard shard)
-    {
-        // this is the local shard's state ONLY; we don't know it is globally preapplied (and hence durable)
-        if (shard.isHome())
-            ensure(txnId).home().atLeast(this, ReadyToExecute, Queued);
-    }
-
-
-    @Override
-    public void update(TxnId txnId, Command command)
+    public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after)
     {
         if (!txnId.kind().isGloballyVisible())
             return;
 
-        TxnState state = get(txnId);
-        if (state != null)
+        TxnState state = null;
+        if (before.route() == null && after.route() != null)
         {
-            state.waiting().record(this, command);
-
-            switch (command.saveStatus())
+            RoutingKey homeKey = after.homeKey();
+            Ranges coordinateRanges = safeStore.ranges().allAt(txnId.epoch());
+            boolean isHome = coordinateRanges.contains(homeKey);
+            state = get(txnId);
+            if (isHome && state == null)
             {
-                case ReadyToExecute:
-                    if (state.isHomeInitialised()) // if home, will have been initialised by commit
-                        state.home().atLeast(this, AwaitReadyToExecute, Queued);
-                    break;
+                state = insert(txnId);
+                if (after.durability().isDurableOrInvalidated())
+                {
+                    state.setHomeDoneAnyMaybeRemove(this);
+                    if (!after.hasBeen(PreApplied))
+                        state.waiting().setBlockedUntil(safeStore, this, CanApply);
+                }
+                else
+                    state.set(safeStore, this, Undecided, Queued);
+            }
+            else if (state != null)
+            {
+                // not home shard
+                state.setHomeDone(this);
+            }
+        }
+        else if (after.durability().isDurableOrInvalidated() && !before.durability().isDurableOrInvalidated())
+        {
+            state = get(txnId);
+            if (state != null)
+                state.setHomeDoneAnyMaybeRemove(this);
 
-                case Applied:
-                    if (state.isHomeDoneOrUninitialised()) clear(state);
-                    else state.setWaitingDoneAndMaybeRemove(this);
+            if (!after.hasBeen(PreApplied))
+            {
+                // this command should be ready to apply locally, so fetch it
+                if (state == null)
+                    state = insert(txnId);
+                state.waiting().setBlockedUntil(safeStore, this, CanApply);
+            }
+        }
+
+        SaveStatus beforeSaveStatus = before.saveStatus();
+        SaveStatus afterSaveStatus = after.saveStatus();
+        if (beforeSaveStatus == afterSaveStatus)
+            return;
+
+        if (state == null)
+            state = get(txnId);
+
+        if (state == null)
+            return;
+
+        state.waiting().record(this, afterSaveStatus);
+        if (state.isHomeInitialised())
+        {
+            switch (afterSaveStatus)
+            {
+                case Stable:
+                    state.home().atLeast(safeStore, this, Undecided, NoneExpected);
+                    break;
+                case ReadyToExecute:
+                    state.home().atLeast(safeStore, this, AwaitReadyToExecute, Queued);
+                    break;
+                case PreApplied:
+                    state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
+                    break;
             }
         }
     }
@@ -255,41 +269,12 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     void remove(TxnId txnId)
     {
-        stateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
+        Object[] newStateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
+        if (stateMap != newStateMap)
+            node.agent().metricsEventsListener().onProgressLogSizeChange(txnId, -1);
+        stateMap = newStateMap;
         if (deleted != null)
             deleted.put(txnId, Thread.currentThread().getStackTrace());
-    }
-
-    @Override
-    public void durable(SafeCommand safeCommand)
-    {
-        // if we participate in the transaction and its outcome hasn't been recorded locally then fetch it
-        // TODO (expected): we should delete the in-memory state once we reach Done, and guard against backward progress with Command state
-        //   however, we need to be careful:
-        //     - we might participate in the execution epoch so need to be sure we have received a route covering both
-        Command command = safeCommand.current();
-        TxnId txnId = command.txnId();
-
-        if (command.hasBeen(Applied))
-        {
-            clear(txnId);
-            return;
-        }
-
-        Route<?> route = command.route();
-        if (route == null)
-            return;
-
-        Ranges coordinateRanges = commandStore.unsafeRangesForEpoch().allAt(txnId.epoch());
-        if (coordinateRanges.contains(route.homeKey()))
-        {
-            TxnState state = command.hasBeen(PreApplied) ? get(txnId) : ensure(txnId);
-            if (state != null)
-                state.home().durable(this);
-        }
-
-        if (!command.status().hasBeen(PreApplied) && route.participatesIn(coordinateRanges))
-            waiting(CanApply, safeCommand, null, null);
     }
 
     @Override
@@ -301,7 +286,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     }
 
     @Override
-    public void waiting(BlockedUntil blockedUntil, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants)
+    public void waiting(BlockedUntil blockedUntil, SafeCommandStore safeStore, SafeCommand blockedBy, Route<?> blockedOnRoute, Participants<?> blockedOnParticipants)
     {
         if (!blockedBy.txnId().kind().isGloballyVisible())
             return;
@@ -326,7 +311,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         else if (blockedOnRoute != null) update = update.mutable().route(blockedOnRoute);
         else if (blockedOnParticipants != null) update = update.mutable().participants(blockedOnParticipants);
         if (update != blockedBy.current())
-            blockedBy.updateAttributes(update);
+            blockedBy.updateAttributes(safeStore, update);
 
         // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;
         //                  today, an LWT can pre-empt more efficiently (i.e. instantly) a failed operation whereas Accord will
@@ -336,7 +321,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         // TODO (desirable, efficiency): if we are co-located with the home shard, don't need to do anything unless we're in a
         //                               later topology that wasn't covered by its coordination
         TxnState state = ensure(blockedBy.txnId());
-        state.waiting().setBlockedUntil(this, blockedUntil);
+        state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
     }
 
     void ensureScheduled()
@@ -509,7 +494,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             {
                 boolean isRetry = run.waitingProgress() == Awaiting;
                 if (isRetry) run.incrementRetryCounter();
-                run.runWaiting(DefaultProgressLog.this, safeStore, safeCommand);
+                run.runWaiting(safeStore, safeCommand, DefaultProgressLog.this);
             }
         }
 

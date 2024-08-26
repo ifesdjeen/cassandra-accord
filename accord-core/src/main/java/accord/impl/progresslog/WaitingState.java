@@ -97,11 +97,11 @@ abstract class WaitingState extends BaseTxnState
         super(txnId);
     }
 
-    private void set(DefaultProgressLog owner, BlockedUntil newBlockedUntil, Progress newProgress)
+    private void set(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil newBlockedUntil, Progress newProgress)
     {
         encodedState &= SET_MASK;
         encodedState |= ((long) newBlockedUntil.ordinal() << BLOCKED_UNTIL_SHIFT) | ((long) newProgress.ordinal() << PROGRESS_SHIFT);
-        updateScheduling(owner, Waiting, newBlockedUntil, newProgress);
+        updateScheduling(safeStore, owner, Waiting, newBlockedUntil, newProgress);
     }
 
     private void setHomeSatisfies(BlockedUntil homeStatus)
@@ -231,55 +231,49 @@ abstract class WaitingState extends BaseTxnState
 
     void setWaitingDone(DefaultProgressLog owner)
     {
-        set(owner, CanApply, NoneExpected);
+        set(null, owner, CanApply, NoneExpected);
         owner.clearActive(Waiting, txnId);
         clearRetryCounter();
     }
 
-    void setWaitingDoneAndMaybeRemove(DefaultProgressLog owner)
+    void setBlockedUntil(SafeCommandStore safeStore, DefaultProgressLog owner, BlockedUntil blockedUntil)
     {
-        setWaitingDone(owner);
-        maybeRemove(owner);
-    }
-
-    void setBlockedUntil(DefaultProgressLog owner, BlockedUntil blockedUntil)
-    {
-        if (txnId.toString().equals("[5,5003,7(RS),7]") && owner.commandStore.toString().equals("DelayedCommandStore{id=2,node=1}"))
-            System.out.println();
-
         BlockedUntil currentlyBlockedUntil = blockedUntil();
         if (blockedUntil.compareTo(currentlyBlockedUntil) > 0 || isUninitialised())
         {
             clearAwaitState();
             clearRetryCounter();
             owner.clearActive(Waiting, txnId);
-            set(owner, blockedUntil, Queued);
+            set(safeStore, owner, blockedUntil, Queued);
         }
     }
 
-    void record(DefaultProgressLog owner, Command command)
+    void record(DefaultProgressLog owner, SaveStatus newSaveStatus)
     {
         BlockedUntil currentlyBlockedUntil = blockedUntil();
-        if (currentlyBlockedUntil.minSaveStatus.compareTo(command.saveStatus()) <= 0)
+        if (currentlyBlockedUntil.minSaveStatus.compareTo(newSaveStatus) <= 0)
         {
-            set(owner, currentlyBlockedUntil, NoneExpected);
+            boolean isDone = newSaveStatus.hasBeen(Status.PreApplied);
+            set(null, owner, isDone ? CanApply : currentlyBlockedUntil, NoneExpected);
+            if (isDone)
+                maybeRemove(owner);
             owner.clearActive(Waiting, txnId);
         }
     }
 
-    final void runWaiting(DefaultProgressLog owner, SafeCommandStore safeStore, SafeCommand safeCommand)
+    final void runWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
-        run(owner, safeStore, safeCommand);
+        run(safeStore, safeCommand, owner);
     }
 
-    private void run(DefaultProgressLog owner, SafeCommandStore safeStore, SafeCommand safeCommand)
+    private void run(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         Invariants.checkState(!owner.hasActive(Waiting, txnId));
         Invariants.checkState(command.saveStatus().compareTo(blockedUntil.minSaveStatus) < 0, "Command has met desired criteria but progress log entry has not been cancelled");
 
-        set(owner, blockedUntil, Querying);
+        set(safeStore, owner, blockedUntil, Querying);
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
         Timestamp executeAt = command.executeAtIfKnown();
@@ -352,7 +346,7 @@ abstract class WaitingState extends BaseTxnState
             if (route == null)
             {
                 Invariants.checkState(kind == FetchRoute);
-                state.retry(owner, safeStore, safeCommand, blockedUntil);
+                state.retry(safeStore, safeCommand, owner, blockedUntil);
                 return;
             }
 
@@ -383,11 +377,11 @@ abstract class WaitingState extends BaseTxnState
                     {
                         Invariants.checkState(0 == state.awaitRoundIndex(roundSize));
                         Invariants.checkState(0 == state.awaitBitSet(roundSize));
-                        state.run(owner, safeStore, safeCommand);
+                        state.run(safeStore, safeCommand, owner);
                     }
                     else
                     {
-                        state.set(owner, blockedUntil, Awaiting);
+                        state.set(safeStore, owner, blockedUntil, Awaiting);
                     }
                     break;
 
@@ -398,7 +392,7 @@ abstract class WaitingState extends BaseTxnState
                         Invariants.checkState((int) awaitRoute.findNextIntersection(roundStart, (Routables) ready, 0) / roundSize == roundIndex);
                         // TODO (desired): in this case perhaps upgrade to fetch for next round?
                         state.updateAwaitRound(roundIndex + 1, roundSize);
-                        state.run(owner, safeStore, safeCommand);
+                        state.run(safeStore, safeCommand, owner);
                     }
                     else
                     {
@@ -406,14 +400,14 @@ abstract class WaitingState extends BaseTxnState
                         // TODO (desired): would be nice to validate this is 0 in cases where we are starting a fresh round
                         //  but have to be careful as cannot zero when we restart as we may have an async callback arrive while we're waiting that then advances state machine
                         state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.set(owner, blockedUntil, Awaiting);
+                        state.set(safeStore, owner, blockedUntil, Awaiting);
                     }
                     break;
 
                 case FetchRoute:
                     if (state.homeSatisfies().compareTo(blockedUntil) < 0)
                     {
-                        state.run(owner, safeStore, safeCommand);
+                        state.run(safeStore, safeCommand, owner);
                         return;
                     }
                     // we may not have requested everything since we didn't have a Route, so calculate our own notReady and fall-through
@@ -436,7 +430,7 @@ abstract class WaitingState extends BaseTxnState
                     {
                         // we don't think we have anything to wait for, but we have encountered some notReady responses; queue up a retry
                         state.setAwaitDone(roundSize);
-                        state.retry(owner, safeStore, safeCommand, blockedUntil);
+                        state.retry(safeStore, safeCommand, owner, blockedUntil);
                     }
                     else
                     {
@@ -444,14 +438,14 @@ abstract class WaitingState extends BaseTxnState
                         roundIndex = nextIndex / roundSize;
                         state.updateAwaitRound(roundIndex, roundSize);
                         state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.run(owner, safeStore, safeCommand);
+                        state.run(safeStore, safeCommand, owner);
                     }
                 }
             }
         }
         else
         {
-            state.retry(owner, safeStore, safeCommand, blockedUntil);
+            state.retry(safeStore, safeCommand, owner, blockedUntil);
         }
     }
 
@@ -514,7 +508,7 @@ abstract class WaitingState extends BaseTxnState
 
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             if (safeCommand != null)
-                run(owner, safeStore, safeCommand);
+                run(safeStore, safeCommand, owner);
         }
         else
         {
@@ -536,23 +530,23 @@ abstract class WaitingState extends BaseTxnState
             setAwaitBitSet(bitSet, roundSize);
 
             if (bitSet == 0)
-                run(owner, safeStore, safeCommand);
+                run(safeStore, safeCommand, owner);
         }
     }
 
     // TODO (expected): use back-off counter here
-    private void retry(DefaultProgressLog owner, SafeCommandStore safeStore, SafeCommand safeCommand, BlockedUntil blockedUntil)
+    private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil blockedUntil)
     {
         if (!contactEveryone())
         {
             setContactEveryone(true);
             // try again immediately with a query to all eligible replicas
-            run(owner, safeStore, safeCommand);
+            run(safeStore, safeCommand, owner);
         }
         else
         {
             // queue a retry
-            set(owner, blockedUntil, Queued);
+            set(safeStore, owner, blockedUntil, Queued);
         }
     }
 

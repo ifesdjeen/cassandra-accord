@@ -155,7 +155,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
         SafeCommand safeCommand = safeStore.get(txnId, this, query);
         Command command = safeCommand.current();
 
-        Commands.ensureHomeIsMonitoring(safeStore, safeCommand, command, query);
+        Commands.updateRouteOrParticipants(safeStore, safeCommand, query);
 
         boolean isCoordinating = isCoordinating(node, command);
         Durability durability = command.durability();

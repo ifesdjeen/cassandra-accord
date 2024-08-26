@@ -27,6 +27,8 @@ import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
 import accord.messages.Await;
 import accord.messages.Await.AwaitOk;
 import accord.messages.Callback;
@@ -73,7 +75,8 @@ public class AsynchronousAwait implements Callback<AwaitOk>
     }
 
     /**
-     * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#ensureHomeIsMonitoring}
+     * we require a Route to contact so we can be sure a home shard recipient invokes {@link Commands#updateRouteOrParticipants},
+     * notifying the progress log of a Route to determine it is the home shard.
      */
     public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
