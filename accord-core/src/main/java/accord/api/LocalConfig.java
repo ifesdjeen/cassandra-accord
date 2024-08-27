@@ -16,18 +16,13 @@
  * limitations under the License.
  */
 
-package accord.config;
+package accord.api;
 
 import java.time.Duration;
 
 public interface LocalConfig
 {
     LocalConfig DEFAULT = new LocalConfig() {};
-
-    default Duration getProgressLogScheduleDelay()
-    {
-        return Duration.ofSeconds(1);
-    }
 
     // How long before we start notifying waiters on an epoch of timeout,
     default Duration epochFetchInitialTimeout()

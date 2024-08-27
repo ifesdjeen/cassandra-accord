@@ -32,8 +32,7 @@ import accord.api.Key;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
@@ -167,7 +166,7 @@ public class Utils
     {
         MockStore store = new MockStore();
         Scheduler scheduler = new ThreadPoolScheduler();
-        LocalConfig localConfig = new MutableLocalConfig();
+        LocalConfig localConfig = LocalConfig.DEFAULT;
         Node node = new Node(nodeId,
                              messageSink,
                              new MockConfigurationService(messageSink, EpochFunction.noop(), topology),

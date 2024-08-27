@@ -41,8 +41,7 @@ import java.util.function.Supplier;
 
 import accord.api.MessageSink;
 import accord.api.Scheduler;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.DefaultLocalListeners;
@@ -327,7 +326,7 @@ public class Cluster implements Scheduler
             {
                 MessageSink messageSink = sinks.create(node, randomSupplier.get());
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
-                LocalConfig localConfig = new MutableLocalConfig();
+                LocalConfig localConfig = LocalConfig.DEFAULT;
                 lookup.put(node, new Node(node, messageSink, new SimpleConfigService(topology),
                                           nowSupplier, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, nowSupplier),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),

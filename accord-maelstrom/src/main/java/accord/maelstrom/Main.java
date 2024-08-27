@@ -32,8 +32,7 @@ import java.util.function.Supplier;
 
 import accord.api.MessageSink;
 import accord.api.Scheduler;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.Timeout;
 import accord.impl.InMemoryCommandStores;
@@ -177,7 +176,7 @@ public class Main
             MaelstromInit init = (MaelstromInit) packet.body;
             topology = topologyFactory.toTopology(init.cluster);
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
-            LocalConfig localConfig = new MutableLocalConfig();
+            LocalConfig localConfig = LocalConfig.DEFAULT;
             on = new Node(init.self, sink, new SimpleConfigService(topology),
                           System::currentTimeMillis, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MILLISECONDS, System::currentTimeMillis),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),

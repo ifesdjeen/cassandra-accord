@@ -38,7 +38,7 @@ import accord.api.ConfigurationService.EpochReady;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
-import accord.config.LocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.EpochTimeout;
 import accord.coordinate.TopologyMismatch;
 import accord.coordinate.tracking.QuorumTracker;

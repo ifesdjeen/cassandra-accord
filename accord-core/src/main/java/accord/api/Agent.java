@@ -35,6 +35,8 @@ import accord.topology.Topologies;
 
 /**
  * Facility for augmenting node behaviour at specific points
+ *
+ * TODO (expected): rationalise LocalConfig and Agent
  */
 public interface Agent extends UncaughtExceptionListener
 {

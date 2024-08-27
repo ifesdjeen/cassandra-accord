@@ -34,8 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.NetworkFilter;
 import accord.api.MessageSink;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
@@ -123,7 +122,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         MockStore store = new MockStore();
         MessageSink messageSink = messageSinkFactory.apply(id, this);
         MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
-        LocalConfig localConfig = new MutableLocalConfig();
+        LocalConfig localConfig = LocalConfig.DEFAULT;
         Node node = new Node(id,
                              messageSink,
                              configurationService,

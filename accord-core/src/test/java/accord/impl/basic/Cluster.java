@@ -55,8 +55,7 @@ import accord.api.Scheduler;
 import accord.burn.BurnTestConfigurationService;
 import accord.burn.TopologyUpdates;
 import accord.burn.random.FrequentLargeRange;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
+import accord.api.LocalConfig;
 import accord.coordinate.Barrier;
 import accord.coordinate.CoordinationAdapter;
 import accord.coordinate.Exhausted;
@@ -418,7 +417,7 @@ public class Cluster implements Scheduler
             {
                 MessageSink messageSink = sinks.create(id, randomSupplier.get());
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
-                LocalConfig localConfig = new MutableLocalConfig();
+                LocalConfig localConfig = LocalConfig.DEFAULT;
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
                 executorMap.put(id, nodeExecutor);

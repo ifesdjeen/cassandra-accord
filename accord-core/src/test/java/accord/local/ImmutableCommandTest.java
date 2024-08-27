@@ -28,12 +28,11 @@ import com.google.common.collect.Lists;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.api.LocalConfig;
 import accord.api.ProgressLog.NoOpProgressLog;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.TestableConfigurationService;
-import accord.config.LocalConfig;
-import accord.config.MutableLocalConfig;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStores;
@@ -100,7 +99,7 @@ public class ImmutableCommandTest
     private static Node createNode(Id id, CommandStoreSupport storeSupport)
     {
         MockCluster.Clock clock = new MockCluster.Clock(100);
-        LocalConfig localConfig = new MutableLocalConfig();
+        LocalConfig localConfig = LocalConfig.DEFAULT;
         Node node = new Node(id, null, new MockConfigurationService(null, (epoch, service) -> { }, storeSupport.local.get()),
                              clock, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, clock),
                              () -> storeSupport.data, new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()), new TestAgent(), new DefaultRandom(), Scheduler.NEVER_RUN_SCHEDULED,
