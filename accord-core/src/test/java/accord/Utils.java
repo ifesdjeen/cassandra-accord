@@ -34,6 +34,7 @@ import accord.api.Scheduler;
 import accord.api.TopologySorter;
 import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
+import accord.impl.DefaultRequestTimeouts;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
 import accord.impl.DefaultLocalListeners;
@@ -179,6 +180,7 @@ public class Utils
                              scheduler,
                              SizeOfIntersectionSorter.SUPPLIER,
                              DefaultRemoteListeners::new,
+                             DefaultRequestTimeouts::new,
                              DefaultProgressLogs::new,
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,

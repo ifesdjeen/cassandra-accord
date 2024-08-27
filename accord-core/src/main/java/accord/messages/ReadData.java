@@ -26,6 +26,8 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Data;
 import accord.api.LocalListeners;
+import accord.api.RequestTimeouts;
+import accord.api.RequestTimeouts.RegisteredTimeout;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -51,8 +53,9 @@ import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.TxnRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
-public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrReadNack> implements EpochSupplier, LocalListeners.ComplexListener
+public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrReadNack> implements EpochSupplier, LocalListeners.ComplexListener, RequestTimeouts.Timeout
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
 
@@ -112,6 +115,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     transient int waitingOnCount;
     transient Ranges unavailable, notReady;
     Int2ObjectHashMap<LocalListeners.Registered> registrations = new Int2ObjectHashMap<>();
+    RegisteredTimeout timeout;
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> readScope, long executeAtEpoch)
     {
@@ -280,9 +284,18 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     {
         // Unless failed always ack to indicate setup has completed otherwise the counter never gets to -1
         if ((reply == null || !reply.isFinal()) && failure == null)
+        {
             onOneSuccess(-1, null);
+            if (state == State.PENDING)
+            {
+                long replyTimeout = node.agent().replyTimeout(replyContext, MILLISECONDS);
+                timeout = node.requestTimeouts().register(this, replyTimeout, MILLISECONDS);
+            }
+        }
         else
+        {
             onFailure(reply, failure);
+        }
     }
 
     protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Ranges unavailable)
@@ -377,6 +390,9 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
 
     void cancel()
     {
+        if (timeout != null)
+            timeout.cancel();
+
         state = State.OBSOLETE;
         registrations.forEach((i, r) -> r.cancel());
         waitingOn.clear();
@@ -386,7 +402,13 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         notReady = null;
     }
 
-    void onFailure(CommitOrReadNack failReply, Throwable throwable)
+    synchronized public void timeout()
+    {
+        timeout = null;
+        cancel();
+    }
+
+    synchronized void onFailure(CommitOrReadNack failReply, Throwable throwable)
     {
         cancel();
         if (throwable != null)

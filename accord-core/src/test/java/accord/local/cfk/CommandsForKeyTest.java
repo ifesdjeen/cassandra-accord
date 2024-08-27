@@ -64,6 +64,7 @@ import accord.local.SafeCommandStore;
 import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.messages.ReplyContext;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
@@ -1022,6 +1023,12 @@ public class CommandsForKeyTest
 
         @Override
         public Txn emptySystemTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long replyTimeout(ReplyContext replyContext, TimeUnit units)
         {
             throw new UnsupportedOperationException();
         }

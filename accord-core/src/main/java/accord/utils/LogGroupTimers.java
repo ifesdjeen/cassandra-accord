@@ -21,6 +21,9 @@ package accord.utils;
 import java.util.Comparator;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
+
+import accord.api.Scheduler;
 
 /**
  * Basic idea is we collect timers in buckets that are logarithmically/exponentially spaced,
@@ -61,6 +64,71 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     {
         private int deadlineSinceEpoch;
         private int shiftedBucketEpoch;
+    }
+
+    public class Scheduling
+    {
+        final Scheduler scheduler;
+        final Function<T, Runnable> taskFactory;
+        final long schedulerImpreciseLateTolerance;
+        final long schedulerPreciseLateTolerance;
+        final long preciseDelayThreshold;
+
+        Scheduler.Scheduled scheduled = Scheduler.CANCELLED;
+        long lastNow; // now can go backwards in time since we calculate it before taking the lock
+        long scheduledAt = Long.MAX_VALUE;;
+
+        /**
+         * Note that the parameter to taskFactory may be null
+         */
+        public Scheduling(Scheduler scheduler, Function<T, Runnable> taskFactory, long schedulerImpreciseLateTolerance, long schedulerPreciseLateTolerance, long preciseDelayThreshold)
+        {
+            this.scheduler = scheduler;
+            this.taskFactory = taskFactory;
+            this.schedulerImpreciseLateTolerance = schedulerImpreciseLateTolerance;
+            this.schedulerPreciseLateTolerance = schedulerPreciseLateTolerance;
+            this.preciseDelayThreshold = preciseDelayThreshold;
+        }
+
+        public void ensureScheduled(long now)
+        {
+            now = Math.max(lastNow, now);
+            T next = peekIfSoonerThan(now + preciseDelayThreshold);
+            long runAt;
+            if (next == null)
+            {
+                runAt = nextDeadlineEpoch();
+                if (runAt < 0)
+                    return;
+
+                // when scheduling an imprecise run time, we don't mind if we're late by some amount
+                // (often we will be early)
+                runAt += schedulerImpreciseLateTolerance;
+            }
+            else
+            {
+                runAt = Math.max(now, deadline(next));
+            }
+
+            if (!scheduled.isDone())
+            {
+                if (runAt > scheduledAt - schedulerPreciseLateTolerance)
+                    return;
+
+                scheduled.cancel();
+            }
+
+            scheduledAt = runAt;
+            lastNow = now;
+            long delay = runAt - now;
+            scheduled = scheduler.once(taskFactory.apply(next), delay, TimeUnit.MICROSECONDS);
+        }
+
+        public void maybeReschedule(long now, long newDeadline)
+        {
+            if (scheduled.isDone() || newDeadline < scheduledAt - schedulerPreciseLateTolerance)
+                ensureScheduled(now);
+        }
     }
 
     static class Bucket<T extends Timer> extends IntrusivePriorityHeap<T> implements Comparable<Bucket<T>>
@@ -131,6 +199,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         }
     }
 
+    final TimeUnit units;
     final long bucketShift;
     final long minBucketSpan;
     final int bucketSplitSize;
@@ -144,16 +213,17 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 
     public LogGroupTimers(TimeUnit units)
     {
-        this(defaultBucketShift(units));
+        this(units, defaultBucketShift(units));
     }
 
-    public LogGroupTimers(int bucketShift)
+    public LogGroupTimers(TimeUnit units, int bucketShift)
     {
-        this(bucketShift, 256);
+        this(units, bucketShift, 256);
     }
 
-    public LogGroupTimers(int bucketShift, int bucketSplitSize)
+    public LogGroupTimers(TimeUnit units, int bucketShift, int bucketSplitSize)
     {
+        this.units = units;
         this.bucketShift = Invariants.checkArgument(bucketShift, bucketShift < 31);
         this.minBucketSpan = 1L << bucketShift;
         this.bucketSplitSize = bucketSplitSize;
@@ -183,6 +253,38 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         }
 
         return null;
+    }
+
+    public T peekIfSoonerThan(long deadlineThreshold)
+    {
+        int i = bucketsStart;
+        while (i < bucketsEnd)
+        {
+            Bucket<T> head = buckets[i++];
+            if (head.epoch >= deadlineThreshold)
+                return null;
+
+            if (!head.isEmpty())
+                return head.peekNode();
+        }
+
+        return null;
+    }
+
+    /**
+     * Return the epoch of the next timer we have to schedule
+     */
+    public long nextDeadlineEpoch()
+    {
+        int i = bucketsStart;
+        while (i < bucketsEnd)
+        {
+            Bucket<T> head = buckets[i++];
+            if (!head.isEmpty())
+                return head.epoch;
+        }
+
+        return -1L;
     }
 
     // unsafe for reentry during advance

@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -30,7 +31,6 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
-import accord.api.Scheduler;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommonAttributes;
@@ -65,6 +65,8 @@ import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.PreApplied;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class DefaultProgressLog implements ProgressLog, Runnable
 {
@@ -77,6 +79,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     private Object[] progressTokenMap = BTree.empty();
 
     private final LogGroupTimers<TxnState> timers = new LogGroupTimers<>(MICROSECONDS);
+    private final LogGroupTimers<TxnState>.Scheduling timerScheduling;
 
     /**
      * A collection of active callbacks (waiting remote replies) or submitted run invocations
@@ -90,14 +93,19 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     private TxnState[] runBuffer = new TxnState[8];
     private int runBufferCount;
 
-    private Scheduler.Scheduled scheduled = Scheduler.CANCELLED;
-    private long scheduledAtMicros = Long.MAX_VALUE;
     private long nextInvokerId;
 
     DefaultProgressLog(Node node, CommandStore commandStore)
     {
         this.node = node;
         this.commandStore = commandStore;
+        Function<TxnState, Runnable> taskFactory = next -> {
+            PreLoadContext context = next == null ? PreLoadContext.empty() : PreLoadContext.contextFor(next.txnId);
+            return () -> commandStore.execute(context, safeStore -> run())
+                                     .begin(commandStore.agent());
+        };
+        this.timerScheduling = timers.new Scheduling(node.scheduler(), taskFactory,
+                                                     MILLISECONDS.toMicros(10), 100, SECONDS.toMicros(1L));
     }
 
     Node node()
@@ -107,8 +115,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     void update(long deadline, TxnState timer)
     {
-        timers.update(deadline, timer);
-        maybeReschedule(deadline);
+        update(node.elapsed(MICROSECONDS), deadline, timer);
     }
 
     void update(long nowMicros, long deadline, TxnState timer)
@@ -323,52 +330,14 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
     }
 
-    void ensureScheduled()
-    {
-        ensureScheduled(-1);
-    }
-
     void ensureScheduled(long nowMicros)
     {
-        TxnState next = timers.peek();
-        if (next == null)
-            return;
-
-        if (nowMicros < 0)
-            nowMicros = node.elapsed(MICROSECONDS);
-
-        long runAt = Math.max(nowMicros, timers.deadline(next));
-        if (!scheduled.isDone())
-        {
-            if (!shouldReschedule(runAt, scheduledAtMicros))
-                return;
-
-            scheduled.cancel();
-        }
-
-        scheduledAtMicros = runAt;
-        long delay = runAt - nowMicros;
-        scheduled = node.scheduler().once(() -> {
-            commandStore.execute(PreLoadContext.contextFor(next.txnId), safeStore -> run())
-                        .begin(commandStore.agent());
-        }, delay, TimeUnit.MICROSECONDS);
-    }
-
-    void maybeReschedule(long newDeadlineMicros)
-    {
-        maybeReschedule(-1, newDeadlineMicros);
+        timerScheduling.ensureScheduled(nowMicros);
     }
 
     void maybeReschedule(long nowMicros, long newDeadlineMicros)
     {
-        if (scheduled.isDone() || shouldReschedule(newDeadlineMicros, scheduledAtMicros))
-            ensureScheduled(nowMicros);
-    }
-
-    boolean shouldReschedule(long newScheduleAtMicros, long scheduledAtMicros)
-    {
-        // permit 100us tolerance - no point rescheduling if will run up to 100us late
-        return newScheduleAtMicros - scheduledAtMicros < 100;
+        timerScheduling.maybeReschedule(nowMicros, newDeadlineMicros);
     }
 
     @Override

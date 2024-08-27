@@ -26,6 +26,7 @@ import accord.api.Result;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
@@ -105,6 +106,12 @@ public class MaelstromAgent implements Agent
     public Txn emptySystemTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges)
     {
         return new Txn.InMemory(kind, keysOrRanges, new MaelstromRead(Keys.EMPTY, Keys.EMPTY), new MaelstromQuery(Node.Id.NONE, -1), null);
+    }
+
+    @Override
+    public long replyTimeout(ReplyContext replyContext, TimeUnit units)
+    {
+        return units.convert(1L, SECONDS);
     }
 
     @Override

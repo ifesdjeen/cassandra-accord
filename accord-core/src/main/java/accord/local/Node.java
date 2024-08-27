@@ -51,6 +51,7 @@ import accord.api.LocalListeners;
 import accord.api.MessageSink;
 import accord.api.ProgressLog;
 import accord.api.RemoteListeners;
+import accord.api.RequestTimeouts;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
@@ -153,6 +154,7 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     private final ConfigurationService configService;
     private final TopologyManager topology;
     private final RemoteListeners listeners;
+    private final RequestTimeouts timeouts;
     private final CommandStores commandStores;
     private final CoordinationAdapter.Factory coordinationAdapters;
 
@@ -172,10 +174,11 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     public Node(Id id, MessageSink messageSink,
                 ConfigurationService configService, LongSupplier nowSupplier, ToLongFunction<TimeUnit> elapsed,
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
-                Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, ProgressLog.Factory> progressLogFactory, Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
+                Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, RequestTimeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory, Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
                 LocalConfig localConfig)
     {
         this.id = id;
+        this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
         this.localConfig = localConfig;
         this.messageSink = messageSink;
         this.configService = configService;
@@ -183,12 +186,12 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
         this.topology = new TopologyManager(topologySorter, agent, id, scheduler, elapsed, localConfig);
         topology.scheduleTopologyUpdateWatchdog();
         this.listeners = remoteListenersFactory.apply(this);
+        this.timeouts = requestTimeoutsFactory.apply(this);
         this.nowSupplier = nowSupplier;
         this.elapsed = elapsed;
         this.now = new AtomicReference<>(Timestamp.fromValues(topology.epoch(), nowSupplier.getAsLong(), id));
         this.agent = agent;
         this.random = random;
-        this.scheduler = scheduler;
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         // TODO review these leak a reference to an object that hasn't finished construction, possibly to other threads
         configService.registerListener(this);
@@ -708,6 +711,11 @@ public class Node implements ConfigurationService.Listener, NodeTimeService
     public RemoteListeners remoteListeners()
     {
         return listeners;
+    }
+
+    public RequestTimeouts requestTimeouts()
+    {
+        return timeouts;
     }
 
     @Override

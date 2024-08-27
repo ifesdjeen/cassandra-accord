@@ -26,6 +26,7 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.messages.ReplyContext;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
@@ -115,6 +116,8 @@ public interface Agent extends UncaughtExceptionListener
      * connecting all replicas of a shard together, e.g. in a ring picking the replicas directly behind you in the ring.
      */
     default Topologies selectPreferred(Node.Id from, Topologies to) { return to; }
+
+    long replyTimeout(ReplyContext replyContext, TimeUnit units);
 
     /**
      *  This method permits implementations to configure the time at which a local home shard will attempt

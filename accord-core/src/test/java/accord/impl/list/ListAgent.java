@@ -30,6 +30,7 @@ import accord.impl.mock.Network;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.messages.ReplyContext;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Seekables;
@@ -53,8 +54,9 @@ public class ListAgent implements Agent
     final BiConsumer<Timestamp, Ranges> onStale;
     final IntSupplier coordinationDelays;
     final IntSupplier progressDelays;
+    final IntSupplier timeoutDelays;
 
-    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays)
+    public ListAgent(RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays)
     {
         this.rnd = rnd;
         this.timeout = timeout;
@@ -63,6 +65,7 @@ public class ListAgent implements Agent
         this.onStale = onStale;
         this.coordinationDelays = coordinationDelays;
         this.progressDelays = progressDelays;
+        this.timeoutDelays = timeoutDelays;
     }
 
     @Override
@@ -132,6 +135,12 @@ public class ListAgent implements Agent
     public Txn emptySystemTxn(Txn.Kind kind, Seekables<?, ?> keysOrRanges)
     {
         return new Txn.InMemory(kind, keysOrRanges, new ListRead(identity(), false, Keys.EMPTY, Keys.EMPTY), new ListQuery(NONE, Integer.MIN_VALUE, false), null);
+    }
+
+    @Override
+    public long replyTimeout(ReplyContext replyContext, TimeUnit units)
+    {
+        return units.convert(timeoutDelays.getAsInt(), MILLISECONDS);
     }
 
     @Override

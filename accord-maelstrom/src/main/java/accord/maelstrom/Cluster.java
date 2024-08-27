@@ -43,6 +43,7 @@ import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
+import accord.impl.DefaultRequestTimeouts;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.progresslog.DefaultProgressLogs;
@@ -331,7 +332,7 @@ public class Cluster implements Scheduler
                                           nowSupplier, NodeTimeService.elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, nowSupplier),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,
-                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new,
+                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultRequestTimeouts::new,
                                           DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
                                           localConfig));
             }
