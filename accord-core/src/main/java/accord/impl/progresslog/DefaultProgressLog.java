@@ -346,7 +346,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         long nowMicros = node.elapsed(TimeUnit.MICROSECONDS);
         try
         {
-            if (DefaultProgressLogs.PAUSE_FOR_TEST)
+            if (DefaultProgressLogs.pauseForTest(this))
             {
                 logger.info("Skipping progress log because it is paused for test");
                 return;

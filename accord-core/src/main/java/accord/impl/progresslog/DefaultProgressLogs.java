@@ -19,6 +19,7 @@
 package accord.impl.progresslog;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import accord.api.ProgressLog;
@@ -30,8 +31,31 @@ import accord.local.Node;
 // TODO (required): evict to disk
 public class DefaultProgressLogs implements ProgressLog.Factory
 {
-    static boolean PAUSE_FOR_TEST = false;
-    public static void unsafePauseForTesting(boolean pause) { PAUSE_FOR_TEST = pause; }
+    static ConcurrentHashMap<DefaultProgressLog, Runnable> PAUSE_FOR_TEST;
+    public static synchronized void unsafePauseForTesting(boolean pause)
+    {
+        if (pause)
+        {
+            PAUSE_FOR_TEST = new ConcurrentHashMap<>();
+        }
+        else
+        {
+            ConcurrentHashMap<DefaultProgressLog, Runnable> reschedule = PAUSE_FOR_TEST;
+            PAUSE_FOR_TEST = null;
+            reschedule.values().forEach(Runnable::run);
+        }
+    }
+
+    static boolean pauseForTest(DefaultProgressLog progressLog)
+    {
+        ConcurrentHashMap<DefaultProgressLog, Runnable> paused = PAUSE_FOR_TEST;
+        if (paused == null)
+            return false;
+
+        if (!paused.containsKey(progressLog))
+            paused.putIfAbsent(progressLog, () -> progressLog.commandStore.execute(progressLog));
+        return true;
+    }
 
     final Node node;
     final List<DefaultProgressLog> instances = new CopyOnWriteArrayList<>();
