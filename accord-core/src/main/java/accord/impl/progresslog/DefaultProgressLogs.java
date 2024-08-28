@@ -42,7 +42,8 @@ public class DefaultProgressLogs implements ProgressLog.Factory
         {
             ConcurrentHashMap<DefaultProgressLog, Runnable> reschedule = PAUSE_FOR_TEST;
             PAUSE_FOR_TEST = null;
-            reschedule.values().forEach(Runnable::run);
+            if (reschedule != null)
+                reschedule.values().forEach(Runnable::run);
         }
     }
 
