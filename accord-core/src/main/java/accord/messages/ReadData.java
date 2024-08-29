@@ -408,6 +408,11 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         cancel();
     }
 
+    public int hashCode()
+    {
+        return txnId.hashCode();
+    }
+
     synchronized void onFailure(CommitOrReadNack failReply, Throwable throwable)
     {
         cancel();
