@@ -260,6 +260,9 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     @Override
     public void clear(TxnId txnId)
     {
+        if (!txnId.kind().isGloballyVisible())
+            return;
+
         TxnState state = get(txnId);
         if (state != null)
             clear(state);

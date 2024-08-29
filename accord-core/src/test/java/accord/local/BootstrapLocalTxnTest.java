@@ -50,7 +50,7 @@ import static accord.utils.Property.qt;
 
 class BootstrapLocalTxnTest
 {
-    private static final Gen<Gen<Cleanup>> CLEANUP_DISTRIBUTION = Gens.enums().allMixedDistribution(Cleanup.class);
+    private static final Gen<Gen<Cleanup>> CLEANUP_DISTRIBUTION = Gens.mixedDistribution(Cleanup.NO, Cleanup.TRUNCATE, Cleanup.TRUNCATE_WITH_OUTCOME, Cleanup.ERASE);
 
     @Test
     public void localOnlyTxnLifeCycle()
@@ -99,6 +99,7 @@ class BootstrapLocalTxnTest
                                      safe.commandStore().setDurableBefore(DurableBefore.create(ranges, nextGlobalSyncId, globalSyncId));
                                      break;
                                  case TRUNCATE_WITH_OUTCOME:
+                                 case INVALIDATE:
                                      // no update to DurableBefore = TRUNCATE_WITH_OUTCOME
                                      break;
                                  default:
