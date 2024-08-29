@@ -47,7 +47,8 @@ public interface NodeTimeService
 
     static ToLongFunction<TimeUnit> elapsedWrapperFromMonotonicSource(TimeUnit sourceUnit, LongSupplier monotonicNowSupplier)
     {
-        return resultUnit ->  resultUnit.convert(monotonicNowSupplier.getAsLong(), sourceUnit);
+        long epoch = Math.max(0, monotonicNowSupplier.getAsLong() - sourceUnit.convert(1L, TimeUnit.DAYS));
+        return resultUnit ->  resultUnit.convert(monotonicNowSupplier.getAsLong() - epoch, sourceUnit);
     }
 
     /**
