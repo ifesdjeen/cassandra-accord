@@ -782,10 +782,10 @@ public class Cluster implements Scheduler
         final TxnId txnId;
         final Command command;
         final DelayedCommandStore commandStore;
-        final TxnId blockedOn;
+        final Command blockedOn;
         final Object blockedVia;
 
-        public BlockingTransaction(TxnId txnId, Command command, DelayedCommandStore commandStore, @Nullable TxnId blockedOn, @Nullable Object blockedVia)
+        public BlockingTransaction(TxnId txnId, Command command, DelayedCommandStore commandStore, @Nullable Command blockedOn, @Nullable Object blockedVia)
         {
             this.txnId = txnId;
             this.command = command;
@@ -819,7 +819,7 @@ public class Cluster implements Scheduler
             if (!command.hasBeen(Status.Stable) || cur.blockedOn == null)
                 break;
 
-            cur = find(cur.blockedOn, null, SaveStatus.Stable);
+            cur = find(cur.blockedOn.txnId(), null, SaveStatus.Stable);
         }
         return result;
     }
@@ -858,14 +858,14 @@ public class Cluster implements Scheduler
             if (txn.blockedOn == null || txn.command.saveStatus().compareTo(SaveStatus.Stable) < 0)
                 return result;
 
-            TxnId blockedOn = txn.blockedOn;
-            GlobalCommand command = txn.commandStore.unsafeCommands().get(txn.blockedOn);
+            Command blockedOn = txn.blockedOn;
+            GlobalCommand command = txn.commandStore.unsafeCommands().get(blockedOn.txnId());
             if (command == null)
                 return result;
-            else if (command.value().saveStatus().compareTo(SaveStatus.ReadyToExecute) < 0)
+            else if (command.value().saveStatus().compareTo(SaveStatus.Applied) < 0)
                 txn = toBlocking(command.value(), txn.commandStore);
             else
-                txn = find(txn.blockedOn, null, null);
+                txn = find(txn.blockedOn.txnId(), null, null);
         }
     }
 
@@ -919,24 +919,27 @@ public class Cluster implements Scheduler
     private BlockingTransaction toBlocking(Command command, DelayedCommandStore store)
     {
         Object blockedVia = null;
-        TxnId blockedOn = null;
+        TxnId blockedOnId = null;
         if (command.hasBeen(Status.Stable) && !command.hasBeen(Status.Truncated))
         {
             Command.WaitingOn waitingOn = command.asCommitted().waitingOn();
             Key blockedOnKey = waitingOn.lastWaitingOnKey();
             if (blockedOnKey == null)
             {
-                blockedOn = waitingOn.nextWaitingOn();
-                if (blockedOn != null)
-                    blockedVia = command.partialDeps().participants(blockedOn);
+                blockedOnId = waitingOn.nextWaitingOn();
+                if (blockedOnId != null)
+                    blockedVia = command.partialDeps().participants(blockedOnId);
             }
             else
             {
                 CommandsForKey cfk = store.unsafeCommandsForKey().get(blockedOnKey).value();
-                blockedOn = cfk.blockedOnTxnId(command.txnId(), command.executeAt());
+                blockedOnId = cfk.blockedOnTxnId(command.txnId(), command.executeAt());
                 blockedVia = cfk;
             }
         }
+        Command blockedOn = null;
+        if (blockedOnId != null)
+            blockedOn = store.unsafeCommands().get(blockedOnId).value();
         return new BlockingTransaction(command.txnId(), command, store, blockedOn, blockedVia);
     }
 

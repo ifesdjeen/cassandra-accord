@@ -195,9 +195,11 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             Ranges coordinateRanges = safeStore.ranges().allAt(txnId.epoch());
             boolean isHome = coordinateRanges.contains(homeKey);
             state = get(txnId);
-            if (isHome && state == null)
+            if (isHome)
             {
-                state = insert(txnId);
+                if (state == null)
+                    state = insert(txnId);
+
                 if (after.durability().isDurableOrInvalidated())
                 {
                     state.setHomeDoneAnyMaybeRemove(this);
