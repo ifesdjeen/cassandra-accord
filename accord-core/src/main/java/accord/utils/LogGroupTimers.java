@@ -18,7 +18,7 @@
 
 package accord.utils;
 
-import java.util.Comparator;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -29,8 +29,8 @@ import accord.api.Scheduler;
  * Basic idea is we collect timers in buckets that are logarithmically/exponentially spaced,
  * with buckets nearer in time closer together (down to some minimum spacing).
  *
- * These buckets are disjoint, and are split on insert when they both exceed a certain size and are eligible
- * to cover a smaller span due to the passing of time.
+ * These buckets are contiguous but non-overlapping, and are split on insert when they both exceed
+ * a certain size and are eligible to cover a smaller span due to the passing of time.
  *
  * A bucket becomes the current epoch once "now" truncated to the minBucketSpan is equal to the bucket's epoch.
  * At this point, the bucket is heapified so that the entries may be visited in order. Prior to this point,
@@ -62,8 +62,11 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 {
     public static class Timer extends IntrusivePriorityHeap.Node
     {
-        private int deadlineSinceEpoch;
-        private int shiftedBucketEpoch;
+        private long deadline;
+        protected long deadline()
+        {
+            return deadline;
+        }
     }
 
     public class Scheduling
@@ -76,7 +79,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 
         Scheduler.Scheduled scheduled = Scheduler.CANCELLED;
         long lastNow; // now can go backwards in time since we calculate it before taking the lock
-        long scheduledAt = Long.MAX_VALUE;;
+        long scheduledAt = Long.MAX_VALUE;
 
         /**
          * Note that the parameter to taskFactory may be null
@@ -107,7 +110,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
             }
             else
             {
-                runAt = Math.max(now, deadline(next));
+                runAt = Math.max(now, next.deadline());
             }
 
             if (!scheduled.isDone())
@@ -133,27 +136,38 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 
     static class Bucket<T extends Timer> extends IntrusivePriorityHeap<T> implements Comparable<Bucket<T>>
     {
-        final long epoch;
-        long bucketSpan; // we use a long to cleanly represent 0x800000000 (Integer.MAX_VALUE+1)
         final LogGroupTimers<T> owner;
+        final long epoch;
+        private long span;
 
-        Bucket(long epoch, long bucketSpan, LogGroupTimers<T> owner)
+        Bucket(LogGroupTimers<T> owner, long epoch, long span)
         {
             this.epoch = epoch;
-            this.bucketSpan = bucketSpan;
             this.owner = owner;
+            this.span = span;
         }
 
-        protected void shrink(long newSpan)
+        @Override
+        protected void heapify()
+        {
+            owner.maybeSplit(this);
+            super.heapify();
+        }
+
+        void setSpan(long newSpan)
+        {
+            this.span = newSpan;
+        }
+
+        protected void redistribute()
         {
             heapifiedSize = 0;
-            bucketSpan = newSpan;
             filterUnheapified(this, Bucket::maybeRedistribute);
         }
 
         private boolean maybeRedistribute(T timer)
         {
-            long deadline = owner.deadline(timer);
+            long deadline = timer.deadline();
             if (contains(deadline))
                 return false;
 
@@ -164,14 +178,14 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         @Override
         protected void append(T timer)
         {
-            Invariants.checkState(epoch + bucketSpan > owner.deadline(timer));
+            Invariants.checkState(epoch + span > timer.deadline());
             super.append(timer);
         }
 
         @Override
         protected void update(T timer)
         {
-            Invariants.checkState(epoch + bucketSpan > owner.deadline(timer));
+            Invariants.checkState(epoch + span > timer.deadline());
             super.update(timer);
         }
 
@@ -190,12 +204,17 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         boolean contains(long deadline)
         {
             deadline -= epoch;
-            return deadline >= 0 && deadline < bucketSpan;
+            return deadline >= 0 && deadline < span;
         }
 
         private static int compareTimers(Timer a, Timer b)
         {
-            return Integer.compare(a.deadlineSinceEpoch, b.deadlineSinceEpoch);
+            return Long.compare(a.deadline, b.deadline);
+        }
+
+        public long end()
+        {
+            return epoch + span;
         }
     }
 
@@ -241,7 +260,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         }
     }
 
-    // non-modifying to support concurrent use with advance
+    // does not clean-up empty buckets to can be used concurrently with advance
     public T peek()
     {
         int i = bucketsStart;
@@ -249,7 +268,15 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         {
             Bucket<T> head = buckets[i++];
             if (!head.isEmpty())
-                return head.peekNode();
+            {
+                T next = head.peekNode();
+                if (next != null)
+                    return next;
+
+                // before heapifying can split the bucket resulting in all entries being redistributed to a later bucket
+                // TODO (desired): better targeted splitting using summary data?
+                Invariants.checkState(head.isEmpty());
+            }
         }
 
         return null;
@@ -294,7 +321,14 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         {
             Bucket<T> head = buckets[bucketsStart];
             if (!head.isEmpty())
-                return head.pollNode();
+            {
+                T next = head.pollNode();
+                if (next != null)
+                    return next;
+                // before heapifying can split the bucket resulting in all entries being redistributed to a later bucket
+                // TODO (desired): better targeted splitting using summary data?
+                Invariants.checkState(head.isEmpty());
+            }
 
             buckets[bucketsStart++] = null;
             if (head == addFinger) addFinger = null;
@@ -319,7 +353,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         {
             // drain buckets that are wholly contained by our new time
             Bucket<T> head = buckets[bucketsStart];
-            if (head.epoch + head.bucketSpan <= now)
+            if (head.epoch + head.span <= now)
             {
                 timerCount -= head.size;
                 head.drain(param, expiredTimers);
@@ -329,7 +363,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
                 T timer;
                 while (null != (timer = head.peekNode()))
                 {
-                    if (deadline(timer) > now)
+                    if (timer.deadline() > now)
                         return;
 
                     --timerCount;
@@ -360,7 +394,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     {
         Invariants.checkState(deadline >= curEpoch);
         Timer t = timer; // cast to access private field
-        Bucket<T> bucket = findBucket((long)t.shiftedBucketEpoch << bucketShift);
+        Bucket<T> bucket = findBucket(t.deadline);
         Invariants.checkState(bucket != null);
         if (bucket.contains(deadline))
         {
@@ -380,21 +414,9 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         {
             int index = findBucketIndex(buckets, bucketsStart, bucketsEnd, deadline);
             bucket = ensureBucket(index, deadline);
-            if (bucket.size >= bucketSplitSize)
-            {
-                long idealSpan = bucketSpan(bucket.epoch);
-                if (idealSpan <= bucket.bucketSpan/2)
-                {
-                    if (buckets[index] != bucket) ++index;
-                    Bucket<T> newBucket = insertBucket(index + 1, bucket.epoch + bucket.bucketSpan/2, bucket.bucketSpan - bucket.bucketSpan/2);
-                    bucket.shrink(idealSpan);
-                    if (newBucket.contains(deadline))
-                        bucket = newBucket;
-                }
-            }
         }
 
-        set(timer, deadline, bucket.epoch);
+        set(timer, deadline);
         bucket.append(timer);
         addFinger = bucket;
     }
@@ -402,7 +424,7 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
     public void remove(T timer)
     {
         Timer t = timer; // cast to access private field
-        Bucket<T> bucket = findBucket((long)t.shiftedBucketEpoch << bucketShift);
+        Bucket<T> bucket = findBucket(t.deadline);
         Invariants.checkState(bucket != null);
         bucket.remove(timer);
         --timerCount;
@@ -418,24 +440,30 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         return timerCount == 0;
     }
 
-    private long bucketEpoch(long deadline, long bucketSpan)
+    private long firstEpoch(long deadline)
     {
-        // once we hit really large bucket sizes we may not be able to encode the deadlineSinceEpoch in an Integer
-        // in this case just permit a linear number of buckets (should be exceptionally rare, or means minBucketMask is poorly configured)
-        long epoch = deadline & -bucketSpan;
-        while (deadline - epoch > Integer.MAX_VALUE)
-            epoch += bucketSpan;
-        return epoch;
+        return deadline & -minBucketSpan;
     }
 
-    private long bucketSpan(long deadline)
+    private long idealSpan(long epoch)
     {
-        if (deadline <= curEpoch)
+        if (epoch <= curEpoch)
             return this.minBucketSpan;
 
-        long bucketSpan = Long.highestOneBit(deadline - curEpoch);
+        long bucketSpan = Long.highestOneBit(epoch - curEpoch);
         bucketSpan = Math.max(minBucketSpan, bucketSpan);
-        bucketSpan = Math.min(0x80000000L, bucketSpan);
+        return bucketSpan;
+    }
+
+    private long minSpan(long epoch, long deadline)
+    {
+        long bucketSpan = 2 * Long.highestOneBit(deadline - epoch);
+        if (bucketSpan < 0)
+        {
+            bucketSpan = Long.MAX_VALUE;
+            Invariants.checkState(deadline - epoch >= 0);
+        }
+        bucketSpan = Math.max(minBucketSpan, bucketSpan);
         return bucketSpan;
     }
 
@@ -448,95 +476,133 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
 
     private Bucket<T> ensureBucket(int index, long deadline)
     {
-        Bucket<T> bucket = null;
-        if (index >= bucketsStart)
+        if (index >= bucketsStart && index < bucketsEnd)
         {
-            bucket = buckets[index];
+            Bucket<T> bucket = buckets[index];
             if (bucket.contains(deadline))
                 return bucket;
-        }
-
-        long insertBucketSpan = bucketSpan(deadline);
-        long insertEpoch = bucketEpoch(deadline, insertBucketSpan);
-        if (bucket != null)
-            insertEpoch = Math.max(insertEpoch, bucket.epoch + bucket.bucketSpan);
-
-        if (index + 1 < bucketsEnd)
-        {
-            Bucket<T> nextBucket = buckets[index + 1];
-            long maxSpan = nextBucket.epoch - insertEpoch;
-            if (maxSpan < insertBucketSpan)
-            {
-                if (maxSpan <= insertBucketSpan / 2)
-                {
-                    insertEpoch = nextBucket.epoch - insertBucketSpan;
-                    if (bucket != null && insertEpoch < bucket.epoch + bucket.bucketSpan)
-                    {
-                        // extend the prior bucket if it doesn't grow by more than 50%
-                        long newSpan = nextBucket.epoch - bucket.epoch;
-                        if (newSpan - bucket.bucketSpan > bucket.bucketSpan / 2)
-                        {
-                            bucket.bucketSpan = nextBucket.epoch - bucket.epoch;
-                            return bucket;
-                        }
-                        insertEpoch = bucket.epoch + bucket.bucketSpan;
-                        insertBucketSpan = nextBucket.epoch - insertEpoch;
-                    }
-                }
-                else insertBucketSpan = maxSpan;
-            }
-        }
-
-        if (bucket != null || index < 0)
             ++index;
-
-        return insertBucket(index, insertEpoch, insertBucketSpan);
-    }
-
-    private Bucket<T> insertBucket(int index, long bucketEpoch, long bucketSpan)
-    {
-        Bucket<T> bucket = new Bucket<>(bucketEpoch, bucketSpan, this);
-        if (bucketsStart > 0)
-        {
-            if (index > bucketsStart)
-            {
-                int shiftCount = index-- - bucketsStart;
-                System.arraycopy(buckets, bucketsStart, buckets, bucketsStart - 1, shiftCount);
-            }
-            --bucketsStart;
+            Invariants.checkState(index == bucketsEnd);
         }
-        else if (bucketsEnd < buckets.length)
+
+        if (index < bucketsStart || bucketsStart == bucketsEnd)
         {
-            System.arraycopy(buckets, index, buckets, index + 1, bucketsEnd - index);
-            ++bucketsEnd;
+            long insertEpoch = firstEpoch(deadline);
+            long insertBucketSpan;
+            if (bucketsStart < bucketsEnd)
+                insertBucketSpan = buckets[bucketsStart].epoch - insertEpoch;
+            else
+                insertBucketSpan = Math.max(idealSpan(insertEpoch), minSpan(insertEpoch, deadline));
+            return prependBucket(insertEpoch, insertBucketSpan);
         }
         else
         {
-            Bucket[] newBuckets = new Bucket[buckets.length * 2];
-            System.arraycopy(buckets, 0, newBuckets, 0, index);
-            System.arraycopy(buckets, index, newBuckets, index + 1, bucketsEnd - index);
-            buckets = newBuckets;
-            ++bucketsEnd;
+            Bucket<T> tail = buckets[bucketsEnd - 1];
+            long insertEpoch = tail.epoch + tail.span;
+            long insertBucketSpan = Math.max(idealSpan(insertEpoch), minSpan(insertEpoch, deadline));
+            return appendBucket(insertEpoch, insertBucketSpan);
         }
-        buckets[index] = bucket;
-        Invariants.checkState(SortedArrays.isSorted(buckets, bucketsStart, bucketsEnd, Comparator.comparingLong(b -> b.epoch)));
+    }
+
+    private Bucket<T> appendBucket(long bucketEpoch, long bucketSpan)
+    {
+        if (bucketsStart > 0)
+        {
+            int count = bucketsEnd - bucketsStart;
+            System.arraycopy(buckets, bucketsStart, buckets, 0, count);
+            Arrays.fill(buckets, count, bucketsEnd, null);
+            bucketsStart = 0;
+            bucketsEnd = count;
+        }
+        else if (bucketsEnd == buckets.length)
+        {
+            buckets = Arrays.copyOf(buckets, bucketsEnd * 2);
+        }
+        Bucket<T> bucket = new Bucket<>(this, bucketEpoch, bucketSpan);
+        buckets[bucketsEnd++] = bucket;
+        checkContiguous();
         return bucket;
     }
 
-    private void set(Timer timer, long deadline, long bucketEpoch)
+    private Bucket<T> prependBucket(long bucketEpoch, long bucketSpan)
     {
-        timer.deadlineSinceEpoch = Math.toIntExact(deadline - bucketEpoch);
-        timer.shiftedBucketEpoch = Math.toIntExact(bucketEpoch >>> bucketShift);
+        if (bucketsStart == 0)
+        {
+            Bucket[] prevBuckets = buckets;
+            if (bucketsEnd == buckets.length)
+                buckets = new Bucket[buckets.length * 2];
+            System.arraycopy(prevBuckets, 0, buckets, 1, bucketsEnd - bucketsStart);
+            ++bucketsStart;
+            ++bucketsEnd;
+        }
+        Bucket<T> bucket = new Bucket<>(this, bucketEpoch, bucketSpan);
+        buckets[--bucketsStart] = bucket;
+        checkContiguous();
+        return bucket;
     }
 
-    public long deadline(Timer timer)
+    private void maybeSplit(Bucket<T> bucket)
     {
-        return deadline(timer.deadlineSinceEpoch, timer.shiftedBucketEpoch);
+        if (bucket.size < bucketSplitSize)
+            return;
+
+        long idealSpan = idealSpan(bucket.epoch);
+        if (idealSpan > bucket.span / 2)
+            return;
+
+        checkContiguous();
+        split(bucket, idealSpan);
     }
 
-    private long deadline(int deadlineSinceEpoch, int shiftedBucketEpoch)
+    private void split(Bucket<T> bucket, long idealSpan)
     {
-        return deadlineSinceEpoch + ((long)shiftedBucketEpoch << bucketShift);
+        int index = findBucketIndex(buckets, bucketsStart, bucketsEnd, bucket.epoch);
+        Invariants.checkState(buckets[index] == bucket);
+        int splitCount = 1;
+        {
+            long nextSpan = idealSpan * 2;
+            long sumSpan = nextSpan;
+            while (sumSpan + nextSpan <= bucket.span)
+            {
+                ++splitCount;
+                sumSpan += nextSpan;
+                nextSpan *= 2;
+            }
+        }
+
+        Bucket[] oldBuckets = buckets;
+        if (splitCount + (bucketsEnd - bucketsStart) > buckets.length)
+            buckets = new Bucket[Math.max(buckets.length * 2, splitCount + bucketsEnd - bucketsStart)];
+
+        ++index;
+        int newIndex = index - bucketsStart;
+        System.arraycopy(oldBuckets, bucketsStart, buckets, 0, newIndex);
+        System.arraycopy(oldBuckets, index, buckets, newIndex + splitCount, bucketsEnd - index);
+        int prevCount = bucketsEnd - bucketsStart;
+        int newEnd = splitCount + prevCount;
+        if (newEnd < bucketsEnd && buckets == oldBuckets)
+            Arrays.fill(buckets, newEnd, bucketsEnd, null);
+        bucketsEnd = splitCount + bucketsEnd - bucketsStart;
+        bucketsStart = 0;
+        long epoch = bucket.epoch + idealSpan;
+        long nextSpan = idealSpan;
+        long remainingSpan = bucket.span - idealSpan;
+        bucket.setSpan(idealSpan);
+        while (splitCount-- > 0)
+        {
+            if (splitCount == 0) nextSpan = remainingSpan;
+            buckets[newIndex++] = new Bucket<>(this, epoch, nextSpan);
+            remainingSpan -= nextSpan;
+            epoch += nextSpan;
+            nextSpan *= 2;
+        }
+        checkContiguous();
+        bucket.redistribute();
+    }
+
+    private void set(Timer timer, long deadline)
+    {
+        timer.deadline = deadline;
     }
 
     // copied and simplified from SortedArrays
@@ -554,4 +620,9 @@ public class LogGroupTimers<T extends LogGroupTimers.Timer>
         return lb - 1;
     }
 
+    private void checkContiguous()
+    {
+        for (int i = bucketsStart + 1 ; i < bucketsEnd ; ++i)
+            Invariants.checkState(buckets[i - 1].end() == buckets[i].epoch);
+    }
 }
