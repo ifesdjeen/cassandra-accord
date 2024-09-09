@@ -37,6 +37,15 @@ import accord.topology.Topologies;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
 
+/**
+ * Perform a distributed wait operation: each commandStore that is contacted either reports that the relevant key(s)
+ * meet the required wait condition, or else registers a callback that will be notified once the wait condition is met
+ * on the replica for those keys. The response informs the initiating operation which keys met the wait condition
+ * before replying, and which are awaiting a distributed response.
+ *
+ * Note that remote listeners may have been registered regardless, as replicas may not be in agreement for each key.
+ * Any listener must be resilient to redundant callbacks.
+ */
 public class AsynchronousAwait implements Callback<AwaitOk>
 {
     // TODO (desired, efficiency): this should collect the executeAt of any commit, and terminate as soon as one is found

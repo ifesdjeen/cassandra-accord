@@ -334,8 +334,10 @@ public abstract class SafeCommandStore
 
     public LocalListeners.Registered registerAndInvoke(TxnId txnId, RoutingKey someKey, LocalListeners.ComplexListener listener)
     {
-        listener.notify(this, get(txnId, someKey));
-        return register(txnId, listener);
+        LocalListeners.Registered registered = register(txnId, listener);
+        if (!listener.notify(this, get(txnId, someKey)))
+            registered.cancel();
+        return registered;
     }
 
     public LocalListeners.Registered register(TxnId txnId, LocalListeners.ComplexListener listener)

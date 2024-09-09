@@ -219,7 +219,6 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
         if (failure == null)
         {
             Ranges unavailable = Ranges.EMPTY;
-            Ranges notReady = Ranges.EMPTY;
             for (ReadShardTracker tracker : trackers)
             {
                 if (tracker == null || tracker.hasSucceeded())
@@ -233,8 +232,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
                 else unavailable = unavailable.with(Ranges.of(tracker.shard.range));
             }
 
-            if (unavailable.isEmpty()) failure = Exhausted.NOT_READY;
-            else failure = new Exhausted(txnId, null, unavailable);
+            failure = new Exhausted(txnId, null, unavailable);
         }
         finishOnFailure();
     }

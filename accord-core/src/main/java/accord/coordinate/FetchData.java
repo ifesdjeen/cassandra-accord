@@ -92,12 +92,15 @@ public class FetchData extends CheckShards<Route<?>>
         }
     }
 
-    public static void fetchExact(Known fetch, Node node, TxnId txnId, Route<?> query, Unseekables<?> propagateTo, @Nullable EpochSupplier forLocalEpoch, @Nullable Timestamp executeAt, BiConsumer<? super FetchResult, Throwable> callback)
+    /**
+     * Do not make an attempt to discern what keys need to be contacted; fetch from only the specific remote keys that were requested.
+     */
+    public static void fetchSpecific(Known fetch, Node node, TxnId txnId, Route<?> query, Unseekables<?> propagateTo, @Nullable EpochSupplier forLocalEpoch, @Nullable Timestamp executeAt, BiConsumer<? super FetchResult, Throwable> callback)
     {
         long srcEpoch = fetch.fetchEpoch(txnId, executeAt);
         if (!node.topology().hasEpoch(srcEpoch))
         {
-            node.withEpoch(srcEpoch, callback, () -> fetchExact(fetch, node, txnId, query, propagateTo, forLocalEpoch, executeAt, callback));
+            node.withEpoch(srcEpoch, callback, () -> fetchSpecific(fetch, node, txnId, query, propagateTo, forLocalEpoch, executeAt, callback));
             return;
         }
 

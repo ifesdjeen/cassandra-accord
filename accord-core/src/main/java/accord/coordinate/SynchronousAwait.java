@@ -38,6 +38,11 @@ import accord.utils.async.AsyncResults;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 
+/**
+ * Synchronously await some set of replicas reaching a given wait condition.
+ * This may or may not be a condition we expect to reach promptly, but we will wait only until the timeout passes
+ * at which point we will report failure.
+ */
 public class SynchronousAwait extends AsyncResults.SettableResult<Void> implements Callback<AwaitOk>
 {
     // TODO (desired, efficiency): this should collect the executeAt of any commit, and terminate as soon as one is found

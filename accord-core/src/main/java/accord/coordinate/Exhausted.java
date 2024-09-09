@@ -31,8 +31,6 @@ import static accord.utils.Invariants.checkState;
  */
 public class Exhausted extends CoordinationFailed
 {
-    static final Exhausted NOT_READY = new Exhausted(null, null, (Ranges)null);
-
     final Ranges unavailable;
     private String message;
 

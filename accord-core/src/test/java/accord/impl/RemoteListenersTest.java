@@ -189,7 +189,6 @@ public class RemoteListenersTest
         final SavingNotifySink testSink = new SavingNotifySink();
         final RemoteListeners test = new DefaultRemoteListeners(testSink);
 
-        final IntHashSet tmpCancelStoreIds = new IntHashSet();
         final IntHashSet tmpUniqueStoreIds = new IntHashSet();
 
         TestCase(RandomSource rnd)
@@ -237,8 +236,6 @@ public class RemoteListenersTest
             int registerCount = rnd.nextInt(1, 10);
             while (registerCount-- > 0)
             {
-                tmpCancelStoreIds.clear();
-
                 SaveStatus awaitSaveStatus = awaits.get();
                 Durability awaitDurability = durabilities.get();
                 Node.Id nodeId = nodeIds.get();
@@ -249,7 +246,6 @@ public class RemoteListenersTest
                 state.listeners.add(new RemoteCallback(nodeId, callbackId));
 
                 int waitingCount = storeIdCount.getAsInt();
-                int cancelWaitingCount = storeIdCount.getAsInt();
 
                 Registration registration = test.register(txnId, awaitSaveStatus, awaitDurability, nodeId, callbackId);
 
@@ -259,36 +255,7 @@ public class RemoteListenersTest
                     state.waitingOn.add(storeId);
                     tmpUniqueStoreIds.add(storeId);
                     SafeCommandStore safeStore = new TestSafeCommandStore(storeId);
-                    if (tmpCancelStoreIds.remove(storeId))
-                        registration.cancel(safeStore);
                     registration.add(safeStore, new TestSafeCommand(txnId, Uninitialised, NotDurable));
-
-                    if (!tmpCancelStoreIds.isEmpty() && rnd.nextBoolean())
-                    {
-                        IntHashSet.IntIterator iterator = tmpCancelStoreIds.iterator();
-                        int cancelStoreId = iterator.nextValue();
-                        iterator.remove();
-                        registration.cancel(new TestSafeCommandStore(cancelStoreId));
-                    }
-                    if (--cancelWaitingCount > 0)
-                    {
-                        int cancelStoreId = storeIds.getAsInt();
-                        if (!state.waitingOn.contains(cancelStoreId))
-                        {
-                            tmpCancelStoreIds.add(cancelStoreId);
-                            registration.add(new TestSafeCommandStore(cancelStoreId), new TestSafeCommand(txnId, Uninitialised, NotDurable));
-                        }
-                    }
-                }
-                if (!tmpCancelStoreIds.isEmpty())
-                {
-                    IntHashSet.IntIterator iterator = tmpCancelStoreIds.iterator();
-                    while (iterator.hasNext())
-                    {
-                        int cancelStoreId = iterator.nextValue();
-                        iterator.remove();
-                        registration.cancel(new TestSafeCommandStore(cancelStoreId));
-                    }
                 }
 
                 int[] uniqueStoreIds = tmpUniqueStoreIds.stream().mapToInt(i -> i).toArray();

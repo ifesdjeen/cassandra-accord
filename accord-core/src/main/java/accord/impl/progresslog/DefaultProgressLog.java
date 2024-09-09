@@ -63,6 +63,7 @@ import static accord.impl.progresslog.TxnStateKind.Home;
 import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.Status.PreApplied;
+import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -83,14 +84,18 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
     /**
      * A collection of active callbacks (waiting remote replies) or submitted run invocations
-     * (perhaps waiting load from disk, or for the CommandStore thread to be available)
+     * (perhaps waiting load from disk, or for the CommandStore thread to be available).
+     *
+     * These callbacks are required to have hashCode() == txnId.hashCode() and equals(txnId) == true,
+     * so that we can manage overriding callbacks on the relevant TxnState.
      */
     private final ObjectHashSet<Object> activeWaiting = new ObjectHashSet<>();
     private final ObjectHashSet<Object> activeHome = new ObjectHashSet<>();
 
     private final Map<TxnId, StackTraceElement[]> deleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
 
-    private TxnState[] runBuffer = new TxnState[8];
+    private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
+    private Object[] runBuffer;
     private int runBufferCount;
 
     private long nextInvokerId;
@@ -359,9 +364,10 @@ public class DefaultProgressLog implements ProgressLog, Runnable
 
             // drain to a buffer to avoid reentrancy
             runBufferCount = 0;
+            runBuffer = EMPTY_RUN_BUFFER;
             timers.advance(nowMicros, this, DefaultProgressLog::addToRunBuffer);
             processRunBuffer(nowMicros);
-            Arrays.fill(runBuffer, 0, runBufferCount, null);
+            cachedAny().forceDiscard(runBuffer, runBufferCount);
         }
         catch (Throwable t)
         {
@@ -377,16 +383,16 @@ public class DefaultProgressLog implements ProgressLog, Runnable
     private void addToRunBuffer(TxnState add)
     {
         if (runBufferCount == runBuffer.length)
-            runBuffer = Arrays.copyOf(runBuffer, runBufferCount * 2);
+            runBuffer = cachedAny().resize(runBuffer, runBufferCount, Math.max(8, runBuffer.length * 2));
         runBuffer[runBufferCount++] = add;
     }
 
-    // TODO (now): invoke immediately if the command is already loaded
+    // TODO (expected): invoke immediately if the command is already loaded
     private void processRunBuffer(long nowMicros)
     {
         for (int i = 0; i < runBufferCount; ++i)
         {
-            TxnState run = runBuffer[i];
+            TxnState run = (TxnState) runBuffer[i];
             Invariants.checkState(!run.isScheduled());
             TxnStateKind runKind = run.wasScheduledTimer();
             validatePreRunState(run, runKind);
@@ -453,15 +459,15 @@ public class DefaultProgressLog implements ProgressLog, Runnable
                 return; // we've been cancelled
 
             Invariants.checkState(get(run.txnId) == run);
-            Invariants.checkState(run.scheduledTimer() != runKind);
-            Invariants.checkState(run.pendingTimer() != runKind);
+            Invariants.checkState(run.scheduledTimer() != runKind, "We are actively executing %s, but we are also scheduled to run this same TxnState later. This should not happen.", runKind);
+            Invariants.checkState(run.pendingTimer() != runKind, "We are actively executing %s, but we also have a pending scheduled task to run this same TxnState later. This should not happen.", runKind);
 
             validatePreRunState(run, runKind);
             if (runKind == Home)
             {
                 boolean isRetry = run.homeProgress() == Awaiting;
                 if (isRetry) run.incrementRetryCounter();
-                run.home().run(DefaultProgressLog.this, safeStore, safeCommand);
+                run.home().runHome(DefaultProgressLog.this, safeStore, safeCommand);
             }
             else
             {

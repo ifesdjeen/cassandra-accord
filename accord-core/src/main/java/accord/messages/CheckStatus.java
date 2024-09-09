@@ -471,7 +471,7 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             return prev.reduce(foundKnown);
         }
 
-        public Ranges knownForRanges(Known required, Unseekables<?> expect)
+        public Ranges knownForRanges(Known required, Ranges expect)
         {
             // TODO (desired): implement and use foldlWithDefaultAndBounds so can subtract rather than add
             return foldlWithBounds(expect, (known, prev, start, end) -> {
@@ -480,12 +480,6 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
 
                 return prev.with(Ranges.of(start.rangeFactory().newRange(start, end)));
             }, Ranges.EMPTY, i -> false);
-        }
-
-        public Unseekables<?> knownFor(Known required, Unseekables<?> expect)
-        {
-            // TODO (desired): implement and use foldlWithDefaultAndBounds so can subtract rather than add
-            return expect.slice(knownForRanges(required, expect));
         }
 
         public static class Builder extends AbstractBoundariesBuilder<RoutingKey, FoundKnown, FoundKnownMap>
@@ -651,16 +645,6 @@ public class CheckStatus extends AbstractEpochRequest<CheckStatus.CheckStatusRep
             Invariants.checkState(!(maxSaveStatus.known.outcome.isInvalidated() || maxKnowledgeSaveStatus.known.outcome.isInvalidated()) || !known.isDecidedToExecute());
             // TODO (desired): make sure these match identically, rather than only ensuring Route.isFullRoute (either by coercing it here or by ensuring it at callers)
             return known;
-        }
-
-        // it is assumed that we are invoking this for a transaction that will execute;
-        // the result may be erroneous if the transaction is invalidated, as logically this can apply to all ranges
-        // TODO (required): this method is not invoked anymore; should we be imposing some equivalent validation on the inner map invocation?
-        //      is the reasoning even valid anymore, given we enrich the map with knownForAll which spreads Invalidated
-        public Ranges knownForRanges(Known required, Ranges expect)
-        {
-            Invariants.checkState(maxSaveStatus != SaveStatus.Invalidated);
-            return map.knownForRanges(required, expect);
         }
 
         @Override

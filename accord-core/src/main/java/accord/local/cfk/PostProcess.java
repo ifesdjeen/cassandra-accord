@@ -128,6 +128,13 @@ abstract class PostProcess
         }
     }
 
+    /**
+     * Anything that is pre-bootstrap can execute immediately, as
+     * logically it will be included in the snapshot we materialise during bootstrap.
+     *
+     * In practice this means that transactions which include a bootstrap range and a range not covered by bootstrap
+     * will not wait for the bootstrapping key.
+     */
     static CommandsForKeyUpdate notifyPreBootstrap(CommandsForKeyUpdate update)
     {
         CommandsForKey cfk = update.cfk();

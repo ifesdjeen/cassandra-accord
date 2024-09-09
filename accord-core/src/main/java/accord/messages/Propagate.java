@@ -494,7 +494,7 @@ public class Propagate implements EpochSupplier, PreLoadContext, MapReduceConsum
     public void accept(Void result, Throwable failure)
     {
         if (null != callback)
-            callback.accept(failure != null ? null : fetchResult != null ? fetchResult : new FetchResult(Known.Nothing, route.slice(0, 0), null), failure);
+            callback.accept(failure != null ? null : finaliseFetchResult(), failure);
     }
 
     @Override

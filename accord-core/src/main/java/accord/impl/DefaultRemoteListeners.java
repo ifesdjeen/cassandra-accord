@@ -34,8 +34,6 @@ import accord.messages.Await.AsyncAwaitComplete;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays;
-import accord.utils.btree.BTree;
 
 // TODO (required): evict to disk
 public class DefaultRemoteListeners implements RemoteListeners
@@ -71,12 +69,20 @@ public class DefaultRemoteListeners implements RemoteListeners
     {
         final int await;
 
-        // waitingOn is sorted, but to save time on deletions we only set the top bit to mark deleted
-        // until we have halved the number of entries, at which point we remove the tombstones
-        // waitingOnSize tracks the top entry, waitingOnCount the number of live entries
+        /**
+         * waitingOn is a sorted list of commandStore ids that have not reached our wait condition.
+         * To save time on deletions, we only set the top bit to mark deleted until we have halved the number of entries,
+         * at which point we remove the tombstones.
+         * waitingOnSize tracks the top entry, waitingOnCount the number of live entries
+         */
         int[] waitingOn;
+        int waitingOnSize, waitingOnCount;
+
+        /**
+         * This is a packed list of listeners, encoding the nodeId to respond to and the callbackId
+         */
         long[] listeners;
-        int waitingOnSize, waitingOnCount, listenerCount;
+        int listenerCount;
 
         StatusListeners(SaveStatus awaitSaveStatus, Durability awaitDurability, int[] waitingOn, int waitingOnCount, int listenerNodeId, int listenerCallbackId)
         {
@@ -108,14 +114,14 @@ public class DefaultRemoteListeners implements RemoteListeners
         {
             this.waitingOn = newWaitingOn;
             this.waitingOnCount = this.waitingOnSize = newWaitingOnCount;
-            Invariants.checkArgument(SortedArrays.isSorted(newWaitingOn, 0, newWaitingOnCount));
+            Invariants.checkArgumentSorted(newWaitingOn, 0, newWaitingOnCount);
         }
         
         private void updateListeners(long[] newListeners, int newListenerCount)
         {
             this.listeners = newListeners;
             this.listenerCount = newListenerCount;
-            Invariants.checkArgument(SortedArrays.isSorted(newListeners, 0, newListenerCount));
+            Invariants.checkArgumentSorted(newListeners, 0, newListenerCount);
         }
 
         void mergeInts(int[] vis, int viSize, int[] vjs, int vjSize, IntMergeConsumer consumer)
@@ -235,6 +241,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             int index = find(waitingOn, 0, waitingOnSize, storeId);
             if (index >= 0 && waitingOn[index] >= 0)
             {
+                // set tombstone flag and decrement count
                 waitingOn[index] |= Integer.MIN_VALUE;
                 --waitingOnCount;
                 if (waitingOnCount <= waitingOnSize / 2)
@@ -274,7 +281,10 @@ public class DefaultRemoteListeners implements RemoteListeners
 
     static class Listeners
     {
-        // btree
+        /**
+         * listeners with their associated status they are waiting for;
+         * this is a sorted list populated [start..end)
+         */
         StatusListeners[] statusListeners;
         int start, end;
 
@@ -383,23 +393,6 @@ public class DefaultRemoteListeners implements RemoteListeners
         }
 
         @Override
-        public synchronized void cancel(SafeCommandStore safeStore)
-        {
-            int storeId = safeStore.commandStore().id();
-            int i = 0;
-            while (i < count)
-            {
-                if (waitingOn[i] != storeId) ++i;
-                else waitingOn[i] = waitingOn[--count];
-            }
-        }
-
-        @Override
-        public void cancel()
-        {
-        }
-
-        @Override
         public int done()
         {
             if (count == 0)
@@ -426,20 +419,6 @@ public class DefaultRemoteListeners implements RemoteListeners
     public DefaultRemoteListeners(Node node)
     {
         this.notifySink = new DefaultNotifySink(node);
-    }
-
-    @Override
-    public boolean isRegistered(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId)
-    {
-        Listeners listeners = this.listeners.get(txnId);
-        if (listeners == null)
-            return false;
-
-        StatusListeners statusListeners = BTree.<Integer, StatusListeners>find(listeners.statusListeners, (await, l) -> Integer.compare(await, l.await), encodeAwait(awaitSaveStatus, awaitDurability));
-        if (statusListeners == null)
-            return false;
-
-        return Arrays.binarySearch(statusListeners.listeners, 0, statusListeners.listenerCount, listener.id) >= 0;
     }
 
     @Override

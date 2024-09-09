@@ -20,7 +20,31 @@ package accord.impl.progresslog;
 
 enum Progress
 {
-    NoneExpected, Queued, Querying, Awaiting;
+    /**
+     * We do not expect any progress for this state machine at present
+     */
+    NoneExpected,
+
+    /**
+     * We expect progress for this state machine, and have queued the TxnState to be processed
+     */
+    Queued,
+
+    /**
+     * The TxnState has recently been processed and sent queries to some replicas to attempt to progress out state machine.
+     * These are messages that expect a synchronous response, and we rely on the outcome of this action to proceed.
+     * We do not register any local timeouts to retry, as we expect the coordination of this query to have its own timeouts.
+     */
+    Querying,
+
+    /**
+     * The TxnState has recently been processed, and a synchronous remote query has completed without finding the
+     * relevant remote state to progress out local state machine, but a remote listener has been registered that
+     * will notify us when a remote replica reaches a point where we can advance our state machine.
+     *
+     * We also register a local timeout to retry, in case this remote reply or the remote listener itself is lost.
+     */
+    Awaiting;
 
     private static final Progress[] lookup = values();
 

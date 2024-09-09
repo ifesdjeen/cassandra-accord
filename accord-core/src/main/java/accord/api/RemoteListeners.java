@@ -46,19 +46,13 @@ public interface RemoteListeners
     {
         // thread safe
         void add(SafeCommandStore safeStore, SafeCommand safeCommand);
-        // thread safe
-        void cancel(SafeCommandStore safeStore);
 
-        // thread unsafe
-        void cancel();
         // thread unsafe
         int done();
     }
 
-    boolean isRegistered(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId);
-
     /**
-     * CallbackId must be a positive integer
+     * CallbackId must be a non-negative integer
      */
     Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId);
     void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev);
@@ -68,13 +62,10 @@ public interface RemoteListeners
         static class NoOpRegistration implements Registration
         {
             @Override public void add(SafeCommandStore safeStore, SafeCommand safeCommand) {}
-            @Override public void cancel(SafeCommandStore safeStore) {}
-            @Override public void cancel() {}
             @Override public int done() { return 0; }
         }
 
-        @Override public boolean isRegistered(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId) { return false; }
-        @Override public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId) { return null;}
+        @Override public Registration register(TxnId txnId, SaveStatus awaitSaveStatus, Durability awaitDurability, Node.Id listener, int callbackId) { return new NoOpRegistration();}
         @Override public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev) {}
     }
 }

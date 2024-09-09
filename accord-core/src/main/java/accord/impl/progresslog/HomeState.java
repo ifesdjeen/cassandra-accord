@@ -103,7 +103,7 @@ abstract class HomeState extends WaitingState
         }
     }
 
-    void run(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
+    final void runHome(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         Invariants.checkState(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();

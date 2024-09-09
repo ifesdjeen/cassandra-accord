@@ -21,13 +21,34 @@ package accord.impl.progresslog;
 // the phase of the distributed state machine
 enum CoordinatePhase
 {
+    /**
+     * This replica is not known to be a home shard of the transaction
+     */
     NotInitialised,
-    // not durably decided
+
+    /**
+     * not durably decided; if eligible to take over coordination, should see if coordination is stalled and if so
+     * take over recovery to ensure an execution decision is reached
+     */
     Undecided,
-    // durably decided, but replicas may not be ready to execute
+
+    /**
+     * durably decided, but replicas may not be ready to execute; should wait until we can expect to successfully
+     * execute the transaction before attempting recovery
+     * TODO (expected): this state is not effectively used today, we only wait for the home shard to be ready to execute,
+     * whereas we can perform a distributed wait using the WaitingState to ensure we can make progress
+     */
     AwaitReadyToExecute,
-    // some replicas of all shards ready to execute
+
+    /**
+     * some replicas of all shards ready to execute; we can expect that the transaction can be successfully executed,
+     * and we should now try to ensure this happens when it is our turn to do so
+     */
     ReadyToExecute,
+
+    /**
+     * The transaction has been durably executed at a majority of replicas of all shards (but not necessarily ourselves)
+     */
     Done
     ;
 

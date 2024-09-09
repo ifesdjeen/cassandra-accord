@@ -58,7 +58,7 @@ public interface NodeTimeService
     @VisibleForTesting
     static ToLongFunction<TimeUnit> elapsedWrapperFromNonMonotonicSource(TimeUnit sourceUnit, LongSupplier nonMonotonicNowSupplier)
     {
-        return elapsedWrapperFromMonotonicSource(sourceUnit, new MonotonicWrapper(nonMonotonicNowSupplier));
+        return elapsedWrapperFromMonotonicSource(sourceUnit, new MonotonicWrapper(sourceUnit, nonMonotonicNowSupplier));
     }
 
     class MonotonicWrapper implements LongSupplier
@@ -67,9 +67,14 @@ public interface NodeTimeService
        private long lastNow = Long.MIN_VALUE;
        private long delta = 0;
 
-       private MonotonicWrapper(LongSupplier nowSupplier)
+       // Use an arbitrary epoch
+       private final long epoch;
+
+       private MonotonicWrapper(TimeUnit nowUnit, LongSupplier nowSupplier)
        {
            this.nowSupplier = nowSupplier;
+           // pick an arbitrary epoch we can safely convert back to any time unit from the source unit
+           this.epoch = nowUnit.convert(Long.MAX_VALUE / 4, TimeUnit.NANOSECONDS);
        }
 
        @Override
@@ -82,7 +87,7 @@ public interface NodeTimeService
                delta = lastNow - now;
            lastNow = now;
 
-           return now + delta;
+           return now + delta + epoch;
        }
     };
 }

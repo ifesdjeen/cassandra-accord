@@ -18,6 +18,9 @@
 
 package accord.impl.progresslog;
 
+/**
+ * The kinds of TxnState we support in the DefaultProgressLog. This is used to manage timers and other shared state.
+ */
 public enum TxnStateKind
 {
     Waiting, Home;

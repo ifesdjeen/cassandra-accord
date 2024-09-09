@@ -71,6 +71,8 @@ final class TxnState extends HomeState
             Invariants.checkState(pendingTimer() == null);
         }
 
+        // previousDeadline is the previous deadline of <updated>;
+        // otherDeadline is the active deadline (if any) of <updated.other()>
         long previousDeadline, otherDeadline;
         if (scheduled == updated)
         {

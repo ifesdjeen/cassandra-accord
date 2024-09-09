@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import java.util.Collection;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
@@ -27,6 +29,7 @@ import javax.annotation.Nullable;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.RemoteListeners;
+import accord.api.RequestTimeouts;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
@@ -44,8 +47,17 @@ import accord.utils.Invariants;
 import accord.utils.MapReduceConsume;
 
 import static accord.messages.TxnRequest.computeScope;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
-public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>, PreLoadContext, LocalListeners.ComplexListener
+/**
+ * Contact a replica to perform a synchronous or asynchronous wait on some condition for a transaction + some keys.
+ * If the callbackId is less than zero, the wait condition is met synchronously - that is, a reply is not forthcoming
+ * until the wait condition is met. A non-negative callbackId will register this callbackId if the wait condition is not
+ * met, and return the set of keys where the wait condition *was* met.
+ *
+ * TODO (desired): return an OK message indicating we're waiting synchronously
+ */
+public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>, PreLoadContext, LocalListeners.ComplexListener, RequestTimeouts.Timeout
 {
     public static class SerializerSupport
     {
@@ -64,11 +76,15 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     private transient Id replyTo;
     private transient ReplyContext replyContext;
 
-    private transient volatile RemoteListeners.Registration registration;
-    private static final AtomicReferenceFieldUpdater<Await, RemoteListeners.Registration> registrationUpdater = AtomicReferenceFieldUpdater.newUpdater(Await.class, RemoteListeners.Registration.class, "registration");
+    private transient volatile RemoteListeners.Registration asyncRegistration;
+    private static final AtomicReferenceFieldUpdater<Await, RemoteListeners.Registration> registrationUpdater = AtomicReferenceFieldUpdater.newUpdater(Await.class, RemoteListeners.Registration.class, "asyncRegistration");
 
     private transient volatile int synchronouslyWaitingOn;
     private static final AtomicIntegerFieldUpdater<Await> synchronouslyWaitingOnUpdater = AtomicIntegerFieldUpdater.newUpdater(Await.class, "synchronouslyWaitingOn");
+
+    private transient volatile Collection<LocalListeners.Registered> syncRegistrations;
+    private static final AtomicReferenceFieldUpdater<Await, Collection<LocalListeners.Registered>> syncRegistrationsUpdater = AtomicReferenceFieldUpdater.newUpdater(Await.class, (Class)Collection.class, "syncRegistrations");
+    private transient RequestTimeouts.RegisteredTimeout timeout;
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil)
     {
@@ -117,31 +133,28 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     public Void apply(SafeCommandStore safeStore)
     {
         SafeCommand safeCommand = safeStore.get(txnId, txnId, scope);
-        Command command = safeCommand.current();
-        if (command.saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
+        if (safeCommand.current().saveStatus().compareTo(blockedUntil.minSaveStatus) >= 0)
             return null;
 
-        // TODO (desired): consider merging these methods?
-        command = Commands.updateRouteOrParticipants(safeStore, safeCommand, scope);
+        Commands.updateRouteOrParticipants(safeStore, safeCommand, scope);
 
         if (callbackId >= 0)
         {
-            RemoteListeners.Registration registered = registration;
+            RemoteListeners.Registration registered = asyncRegistration;
             if (registered == null)
             {
                 registered = node.remoteListeners().register(txnId, blockedUntil.minSaveStatus, blockedUntil.remoteDurability, replyTo, callbackId);
                 if (!registrationUpdater.compareAndSet(this, null, registered))
-                {
-                    registered.cancel();
-                    registered = registration;
-                }
+                    registered = asyncRegistration;
             }
             registered.add(safeStore, safeCommand);
         }
         else
         {
+            if (syncRegistrations == null)
+                syncRegistrationsUpdater.compareAndSet(this, null, new ConcurrentLinkedQueue<>());
+            syncRegistrations.add(safeStore.register(txnId, this));
             synchronouslyWaitingOnUpdater.incrementAndGet(this);
-            safeStore.register(txnId, this);
         }
 
         safeStore.progressLog().waiting(blockedUntil, safeStore, safeCommand, null, scope);
@@ -159,19 +172,46 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     {
         if (failure != null)
         {
-            registration.cancel();
+            cancel();
             node.reply(replyTo, replyContext, null, failure);
         }
         else if (callbackId >= 0)
         {
-            AwaitOk reply = registration == null || 0 == registration.done() ? AwaitOk.Ready : AwaitOk.NotReady;
+            AwaitOk reply = asyncRegistration == null || 0 == asyncRegistration.done() ? AwaitOk.Ready : AwaitOk.NotReady;
             node.reply(replyTo, replyContext, reply, null);
         }
         else
         {
+            if (synchronouslyWaitingOn > 0)
+            {
+                long replyTimeout = node.agent().replyTimeout(replyContext, MILLISECONDS);
+                timeout = node.requestTimeouts().register(this, replyTimeout, MILLISECONDS);
+            }
             if (-1 == synchronouslyWaitingOnUpdater.decrementAndGet(this))
                 node.reply(replyTo, replyContext, AwaitOk.Ready, null);
         }
+    }
+
+    synchronized public void timeout()
+    {
+        timeout = null;
+        cancel();
+    }
+
+    synchronized void cancel()
+    {
+        if (timeout != null)
+        {
+            timeout.cancel();
+            timeout = null;
+        }
+        if (syncRegistrations != null)
+        {
+            syncRegistrations.forEach(LocalListeners.Registered::cancel);
+            syncRegistrations = null;
+        }
+        if (asyncRegistration != null)
+            asyncRegistration = null;
     }
 
     @Override
@@ -261,7 +301,12 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             return true;
 
         if (-1 == synchronouslyWaitingOnUpdater.decrementAndGet(this))
+        {
             node.reply(replyTo, replyContext, AwaitOk.Ready, null);
+            if (timeout != null)
+                timeout.cancel();
+            syncRegistrations = null;
+        }
 
         return false;
     }

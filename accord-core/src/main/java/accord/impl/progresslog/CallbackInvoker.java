@@ -76,10 +76,11 @@ class CallbackInvoker<P, V> implements BiConsumer<V, Throwable>
 
             // we load safeCommand first so that if it clears the progress log we abandon the callback
             SafeCommand safeCommand = safeStore.ifInitialised(txnId);
-            Invariants.checkState(safeCommand != null);
+            if (!owner.deregisterActive(kind(), this))
+                return;
 
-            if (owner.deregisterActive(kind(), this))
-                callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
+            Invariants.checkState(safeCommand != null);
+            callback.callback(safeStore, safeCommand, owner, txnId, param, success, fail);
 
         }).begin(owner.commandStore.agent());
     }

@@ -350,6 +350,16 @@ public class Invariants
         return index;
     }
 
+    public static void checkArgumentSorted(int[] array, int start, int end)
+    {
+        Invariants.checkArgument(SortedArrays.isSorted(array, start, end));
+    }
+
+    public static void checkArgumentSorted(long[] array, int start, int end)
+    {
+        Invariants.checkArgument(SortedArrays.isSorted(array, start, end));
+    }
+
     public static <O> O cast(Object o, Class<O> klass)
     {
         try

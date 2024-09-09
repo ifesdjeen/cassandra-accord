@@ -231,8 +231,7 @@ public class Barrier<S extends Seekables<?, ?>> extends AsyncResults.AbstractRes
     private void register(SafeCommandStore safeStoreWithTxn, TxnId txnId, RoutableKey key)
     {
         BarrierCommandListener listener = new BarrierCommandListener();
-        if (listener.notify(safeStoreWithTxn, safeStoreWithTxn.get(txnId, key.toUnseekable())))
-            safeStoreWithTxn.register(txnId, listener);
+        safeStoreWithTxn.registerAndInvoke(txnId, key.toUnseekable(), listener);
     }
 
     // Hold result of looking for a transaction to act as a barrier for an Epoch

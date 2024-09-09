@@ -263,10 +263,10 @@ abstract class WaitingState extends BaseTxnState
 
     final void runWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
-        run(safeStore, safeCommand, owner);
+        runInternal(safeStore, safeCommand, owner);
     }
 
-    private void run(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
+    private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner)
     {
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
@@ -289,6 +289,7 @@ abstract class WaitingState extends BaseTxnState
         Route<?> route = Route.castToRoute(fetchKeys);
         if (homeSatisfies().compareTo(blockedUntil) < 0)
         {
+            // first wait until the homeKey has progressed to a point where it can answer our query; we don't expect our shards to know until then anyway
             awaitHomeKey(owner, blockedUntil, txnId, executeAt, route);
             return;
         }
@@ -302,12 +303,16 @@ abstract class WaitingState extends BaseTxnState
             return;
         }
 
+        // the awaitRoute may be only the home shard, if that is sufficient to indicate the fetchRoute will be able to answer our query;
+        // the fetchRoute may also be only the home shard, if that is sufficient to answer our query (e.g. for executeAt)
         Route<?> awaitRoute = awaitRoute(slicedRoute, blockedUntil);
         Route<?> fetchRoute = fetchRoute(slicedRoute, awaitRoute, blockedUntil);
 
         if (slicedRoute.size() == 0 || awaitRoute.isHomeKeyOnlyRoute())
         {
-            // at this point we can switch to polling as we know someone has the relevant state
+            // either we await only the home shard (which is already known to meet our criteria)
+            // or there are no specific local keys we want to update;
+            // at this point we can switch to polling as we know someone (i.e. home shard) has the relevant state
             fetch(owner, blockedUntil, txnId, executeAt, toLocalEpoch, slicedRoute, fetchRoute);
             return;
         }
@@ -317,6 +322,7 @@ abstract class WaitingState extends BaseTxnState
         int roundStart = roundIndex * roundSize;
         if (roundStart >= awaitRoute.size())
         {
+            // all of the shards we are awaiting have been processed and found at least one replica that has the state needed to answer our query
             // at this point we can switch to polling as we know someone has the relevant state
             fetch(owner, blockedUntil, txnId, executeAt, toLocalEpoch, slicedRoute, fetchRoute);
             return;
@@ -375,12 +381,15 @@ abstract class WaitingState extends BaseTxnState
                 case AwaitHome:
                     if (notReady == null)
                     {
+                        // the home shard was found to already have the necessary state, with no distributed await;
+                        // we can immediately progress the state machine
                         Invariants.checkState(0 == state.awaitRoundIndex(roundSize));
                         Invariants.checkState(0 == state.awaitBitSet(roundSize));
-                        state.run(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner);
                     }
                     else
                     {
+                        // the home shard is not ready to answer our query, but we have registered our remote callback so can wait for it to contact us
                         state.set(safeStore, owner, blockedUntil, Awaiting);
                     }
                     break;
@@ -392,7 +401,7 @@ abstract class WaitingState extends BaseTxnState
                         Invariants.checkState((int) awaitRoute.findNextIntersection(roundStart, (Routables) ready, 0) / roundSize == roundIndex);
                         // TODO (desired): in this case perhaps upgrade to fetch for next round?
                         state.updateAwaitRound(roundIndex + 1, roundSize);
-                        state.run(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner);
                     }
                     else
                     {
@@ -407,7 +416,7 @@ abstract class WaitingState extends BaseTxnState
                 case FetchRoute:
                     if (state.homeSatisfies().compareTo(blockedUntil) < 0)
                     {
-                        state.run(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner);
                         return;
                     }
                     // we may not have requested everything since we didn't have a Route, so calculate our own notReady and fall-through
@@ -438,7 +447,7 @@ abstract class WaitingState extends BaseTxnState
                         roundIndex = nextIndex / roundSize;
                         state.updateAwaitRound(roundIndex, roundSize);
                         state.initialiseAwaitBitSet(awaitRoute, notReady, roundIndex, roundSize);
-                        state.run(safeStore, safeCommand, owner);
+                        state.runInternal(safeStore, safeCommand, owner);
                     }
                 }
             }
@@ -508,7 +517,7 @@ abstract class WaitingState extends BaseTxnState
 
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             if (safeCommand != null)
-                run(safeStore, safeCommand, owner);
+                runInternal(safeStore, safeCommand, owner);
         }
         else
         {
@@ -530,7 +539,7 @@ abstract class WaitingState extends BaseTxnState
             setAwaitBitSet(bitSet, roundSize);
 
             if (bitSet == 0)
-                run(safeStore, safeCommand, owner);
+                runInternal(safeStore, safeCommand, owner);
         }
     }
 
@@ -541,7 +550,7 @@ abstract class WaitingState extends BaseTxnState
         {
             setContactEveryone(true);
             // try again immediately with a query to all eligible replicas
-            run(safeStore, safeCommand, owner);
+            runInternal(safeStore, safeCommand, owner);
         }
         else
         {
@@ -566,7 +575,7 @@ abstract class WaitingState extends BaseTxnState
         // we MUSt allocate before calling withEpoch to register cancellation, as async
         BiConsumer<FetchData.FetchResult, Throwable> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, WaitingState::fetchCallback);
         owner.node().withEpoch(blockedUntil.fetchEpoch(txnId, executeAt), invoker, () -> {
-            FetchData.fetchExact(blockedUntil.minSaveStatus.known, owner.node(), txnId, fetchRoute, slicedRoute, toLocalEpoch, executeAt, invoker);
+            FetchData.fetchSpecific(blockedUntil.minSaveStatus.known, owner.node(), txnId, fetchRoute, slicedRoute, toLocalEpoch, executeAt, invoker);
         });
     }
 
