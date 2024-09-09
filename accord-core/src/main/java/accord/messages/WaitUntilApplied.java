@@ -78,11 +78,11 @@ public class WaitUntilApplied extends ReadData
     }
 
     @Override
-    protected ReadOk constructReadOk(Ranges unavailable, Ranges notReady, Data data)
+    protected ReadOk constructReadOk(Ranges unavailable, Data data)
     {
         if (retryInLaterEpoch > 0)
-            return new ReadOkWithFutureEpoch(unavailable, notReady, data, retryInLaterEpoch);
-        return new ReadOk(unavailable, notReady, data);
+            return new ReadOkWithFutureEpoch(unavailable, data, retryInLaterEpoch);
+        return new ReadOk(unavailable, data);
     }
 
     @Override

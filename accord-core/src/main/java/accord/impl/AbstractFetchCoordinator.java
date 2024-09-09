@@ -276,11 +276,11 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Throwable fail)
+        protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Throwable fail)
         {
             // TODO (review): If the fetch response actually does some streaming, but we send back the error
             // it is a lot of work and data that might move and be unaccounted for at the coordinator
-            node.reply(replyTo, replyContext, fail == null ? new FetchResponse(unavailable, notReady, data, maxApplied()) : null, fail);
+            node.reply(replyTo, replyContext, fail == null ? new FetchResponse(unavailable, data, maxApplied()) : null, fail);
         }
 
         protected Timestamp maxApplied()
@@ -298,9 +298,9 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     public static class FetchResponse extends ReadOk
     {
         public final @Nullable Timestamp maxApplied;
-        public FetchResponse(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Timestamp maxApplied)
+        public FetchResponse(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Timestamp maxApplied)
         {
-            super(unavailable, notReady, data);
+            super(unavailable, data);
             this.maxApplied = maxApplied;
         }
 

@@ -74,12 +74,12 @@ final class TxnState extends HomeState
         long previousDeadline, otherDeadline;
         if (scheduled == updated)
         {
-            previousDeadline = instance.deadline(this);
+            previousDeadline = deadline();
             otherDeadline = pendingTimerDeadline(previousDeadline);
         }
         else if (scheduled != null)
         {
-            otherDeadline = instance.deadline(this);
+            otherDeadline = deadline();
             previousDeadline = pendingTimerDeadline(otherDeadline);
         }
         else

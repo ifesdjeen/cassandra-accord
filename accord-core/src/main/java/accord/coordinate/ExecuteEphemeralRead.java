@@ -90,12 +90,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
     }
 
     @Override
-    protected Ranges notReady(ReadReply reply)
-    {
-        return ((ReadOk)reply).notReady;
-    }
-
-    @Override
     protected Action process(Id from, ReadReply reply)
     {
         if (reply.isOk())
@@ -112,7 +106,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             if (next != null)
                 data = data == null ? next : data.merge(next);
 
-            return ok.unavailable == null && ok.notReady == null ? Approve : ApprovePartial;
+            return ok.unavailable == null ? Approve : ApprovePartial;
         }
 
         CommitOrReadNack nack = (CommitOrReadNack) reply;

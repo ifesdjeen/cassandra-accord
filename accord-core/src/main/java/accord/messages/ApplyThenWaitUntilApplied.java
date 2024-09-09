@@ -137,12 +137,12 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     }
 
     @Override
-    protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Throwable fail)
+    protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Throwable fail)
     {
         // TODO (expected): don't like the coupling going on here
         if (notify != null)
             node.agent().onLocalBarrier(notify, txnId);
-        super.onAllSuccess(unavailable, notReady, data, fail);
+        super.onAllSuccess(unavailable, data, fail);
     }
 
     @Override

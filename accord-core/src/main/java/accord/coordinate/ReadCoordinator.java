@@ -114,7 +114,6 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
 
     // TODO (desired): this isn't very clean way of integrating these responses
     protected Ranges unavailable(Reply reply) { throw new UnsupportedOperationException(); }
-    protected Ranges notReady(Reply reply) { throw new UnsupportedOperationException(); }
 
     @Override
     public void onSuccess(Id from, Reply reply)
@@ -150,7 +149,7 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
                 break;
 
             case ApprovePartial:
-                handle(recordPartialReadSuccess(from, unavailable(reply), notReady(reply)));
+                handle(recordPartialReadSuccess(from, unavailable(reply)));
                 break;
         }
     }
@@ -226,12 +225,10 @@ public abstract class ReadCoordinator<Reply extends accord.messages.Reply> exten
                 if (tracker == null || tracker.hasSucceeded())
                     continue;
 
-                if (tracker.unavailable() != null || tracker.notReady() != null)
+                if (tracker.unavailable() != null)
                 {
                     if (tracker.unavailable() != null)
                         unavailable = unavailable.with(tracker.unavailable());
-                    if (tracker.notReady() != null)
-                        notReady = notReady.with(tracker.notReady());
                 }
                 else unavailable = unavailable.with(Ranges.of(tracker.shard.range));
             }

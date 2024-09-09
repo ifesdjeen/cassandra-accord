@@ -280,7 +280,7 @@ public class Commit extends TxnRequest<CommitOrReadNack>
         else if (readData != null)
             readData.process(node, replyTo, replyContext);
         else if (kind.saveStatus == Committed)
-            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, null), null);
+            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null), null);
     }
 
     @Override

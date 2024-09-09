@@ -120,11 +120,11 @@ public class AsynchronousAwait implements Callback<AwaitOk>
 
     private void onSuccess()
     {
-        isDone = true;
         Unseekables<?> ready = tracker.ready(contact);
         Unseekables<?> notReady = tracker.notReady(contact);
         if (notReady.isEmpty())
             notReady = null;
+        isDone = true;
         synchronousCallback.accept(new SynchronousResult(ready, notReady), null);
     }
 

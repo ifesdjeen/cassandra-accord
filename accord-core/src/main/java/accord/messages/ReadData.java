@@ -113,7 +113,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     private Data data;
     transient BitSet waitingOn, reading;
     transient int waitingOnCount;
-    transient Ranges unavailable, notReady;
+    transient Ranges unavailable;
     Int2ObjectHashMap<LocalListeners.Registered> registrations = new Int2ObjectHashMap<>();
     RegisteredTimeout timeout;
 
@@ -157,7 +157,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     protected void process()
     {
         waitingOn = new BitSet();
-        reading = waitSynchronously() ? new BitSet() : waitingOn;
+        reading = new BitSet();
         node.mapReduceConsumeLocal(this, readScope, executeAtEpoch, executeAtEpoch, this);
     }
 
@@ -191,16 +191,9 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         {
             default: throw new AssertionError();
             case WAIT:
-                if (waitSynchronously())
-                {
-                    registrations.put(storeId, safeStore.register(txnId, this));
-                    waitingOn.set(storeId);
-                    ++waitingOnCount;
-                }
-                else
-                {
-                    notReady = notReady.with(executeRanges(safeStore));
-                }
+                registrations.put(storeId, safeStore.register(txnId, this));
+                waitingOn.set(storeId);
+                ++waitingOnCount;
 
                 int c = status.compareTo(SaveStatus.Stable);
                 if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, readScope);
@@ -253,11 +246,6 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
             case EXECUTE:
                 if (!reading.get(storeId))
                 {
-                    if (reading == waitingOn)
-                    {
-                        reading = new BitSet();
-                        reading.or(waitingOn);
-                    }
                     if (!waitingOn.get(storeId))
                     {
                         waitingOn.set(storeId);
@@ -266,8 +254,6 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
                     reading.set(storeId);
                     logger.trace("{}: executing read", command.txnId());
                     read(safeStore, command);
-                    if (notReady != null)
-                        notReady = notReady.without(executeRanges(safeStore));
                 }
                 return true;
         }
@@ -362,10 +348,10 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         // and prevents races where we respond before dispatching all the required reads (if the reads are
         // completing faster than the reads can be setup on all required shards)
         if (-1 == --waitingOnCount)
-            onAllSuccess(unavailable, notReady, data, null);
+            onAllSuccess(this.unavailable, data, null);
     }
 
-    protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, @Nullable Throwable fail)
+    protected void onAllSuccess(@Nullable Ranges unavailable, @Nullable Data data, @Nullable Throwable fail)
     {
         switch (state)
         {
@@ -380,7 +366,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
 
             case PENDING:
                 state = State.RETURNED;
-                node.reply(replyTo, replyContext, fail == null ? constructReadOk(unavailable, notReady, data) : null, fail);
+                node.reply(replyTo, replyContext, fail == null ? constructReadOk(unavailable, data) : null, fail);
                 break;
 
             default:
@@ -399,7 +385,6 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         reading.clear();
         data = null;
         unavailable = null;
-        notReady = null;
     }
 
     synchronized public void timeout()
@@ -427,9 +412,9 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         }
     }
 
-    protected ReadOk constructReadOk(Ranges unavailable, Ranges notReady, Data data)
+    protected ReadOk constructReadOk(Ranges unavailable, Data data)
     {
-        return new ReadOk(unavailable, notReady, data);
+        return new ReadOk(unavailable, data);
     }
 
     @Override
@@ -438,11 +423,6 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         return "ReadData{" +
                "txnId:" + txnId +
                '}';
-    }
-
-    public boolean waitSynchronously()
-    {
-        return true;
     }
 
     public interface ReadReply extends Reply
@@ -507,14 +487,13 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
          *
          * TODO (required): narrow to only the *intersecting* ranges that are unavailable, or do so on the recipient
          */
-        public final @Nullable Ranges unavailable, notReady;
+        public final @Nullable Ranges unavailable;
 
         public final @Nullable Data data;
 
-        public ReadOk(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data)
+        public ReadOk(@Nullable Ranges unavailable, @Nullable Data data)
         {
             this.unavailable = unavailable;
-            this.notReady = notReady;
             this.data = data;
         }
 
@@ -522,8 +501,7 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
         public String toString()
         {
             return "ReadOk{" + data
-                   + (unavailable == null ? "" : ", unavailable:" + unavailable)
-                   + (notReady == null ? "" : ", notReady:" + notReady) + '}';
+                   + (unavailable == null ? "" : ", unavailable:" + unavailable) + '}';
         }
 
         @Override
@@ -542,9 +520,9 @@ public abstract class ReadData extends AbstractEpochRequest<ReadData.CommitOrRea
     public static class ReadOkWithFutureEpoch extends ReadOk
     {
         public final long futureEpoch;
-        public ReadOkWithFutureEpoch(@Nullable Ranges unavailable, @Nullable Ranges notReady, @Nullable Data data, long futureEpoch)
+        public ReadOkWithFutureEpoch(@Nullable Ranges unavailable, @Nullable Data data, long futureEpoch)
         {
-            super(unavailable, notReady, data);
+            super(unavailable, data);
             this.futureEpoch = futureEpoch;
         }
 

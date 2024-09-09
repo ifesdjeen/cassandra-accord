@@ -520,11 +520,6 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         active(kind).remove(txnId);
     }
 
-    long deadline(BaseTxnState state)
-    {
-        return timers.deadline(state);
-    }
-
     void unschedule(TxnState state)
     {
         timers.remove(state);
