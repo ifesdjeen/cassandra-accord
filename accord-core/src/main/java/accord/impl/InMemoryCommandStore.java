@@ -19,6 +19,7 @@
 package accord.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,6 +59,7 @@ import accord.local.CommandStores.RangesForEpoch;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractKeys;
 import accord.primitives.Deps;
+import accord.primitives.Keys;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
 import accord.primitives.Range;
@@ -1332,10 +1334,24 @@ public abstract class InMemoryCommandStore extends CommandStore
         if (loading.executeAt() != null)
             this.commandsByExecuteAt.put(loading.executeAt(), globalCommand);
 
+        PreLoadContext context = PreLoadContext.EMPTY_PRELOADCONTEXT;
+        if (CommandsForKey.manages(loading.txnId()))
+        {
+            Keys keys = (Keys) loading.keysOrRanges();
+            if (keys == null || loading.hasBeen(Status.Truncated)) keys = (Keys) prev.keysOrRanges();
+            if (keys != null)
+                context = PreLoadContext.contextFor(loading.txnId(), keys, KeyHistory.COMMANDS);
+        }
+        else if (!CommandsForKey.managesExecution(loading.txnId()) && loading.hasBeen(Status.Stable) && !loading.hasBeen(Status.Truncated) && !prev.hasBeen(Status.Stable))
+        {
+            TxnId txnId = loading.txnId();
+            Keys keys = loading.asCommitted().waitingOn.keys;
+            if (!keys.isEmpty())
+                context = PreLoadContext.contextFor(txnId, keys, KeyHistory.COMMANDS);
+        }
+
         executeInContext(this,
-                         loading.keysOrRanges() == null ?
-                         PreLoadContext.contextFor(loading.txnId()) :
-                         PreLoadContext.contextFor(loading.txnId(), loading.keysOrRanges(), KeyHistory.COMMANDS),
+                         context,
                          safeStore -> {
                              safeStore.replay(() -> {
                                  ((InMemorySafeStore) safeStore).update(prev, loading);

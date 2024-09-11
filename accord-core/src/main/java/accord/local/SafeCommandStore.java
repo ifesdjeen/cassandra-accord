@@ -258,7 +258,7 @@ public abstract class SafeCommandStore
         //    Once committed without a given key, we should be effectively erasing the command from that CFK
         PreLoadContext context = PreLoadContext.contextFor(txnId, keys, COMMANDS);
         // TODO (expected): execute immediately for any keys we already have loaded, and save only those we haven't for later
-        if (safeStore.canExecuteWith(context))
+        if (safeStore.replayMode || safeStore.canExecuteWith(context))
         {
             for (Key key : keys)
             {
@@ -267,7 +267,7 @@ public abstract class SafeCommandStore
         }
         else
         {
-            //Invariants.checkState(!safeStore.replayMode);
+            Invariants.checkState(!safeStore.replayMode);
             safeStore = safeStore; // prevent accidental usage inside lambda
             safeStore.commandStore().execute(context, safeStore0 -> updateManagedCommandsForKey(safeStore0, prev, next))
                           .begin(safeStore.commandStore().agent);
@@ -293,7 +293,7 @@ public abstract class SafeCommandStore
         }
         else
         {
-//            Invariants.checkState(!safeStore.replayMode);
+            Invariants.checkState(!safeStore.replayMode);
             safeStore = safeStore;
             safeStore.commandStore().execute(context, safeStore0 -> updateUnmanagedExecutionCommandsForKey(safeStore0, next))
                           .begin(safeStore.commandStore().agent);
