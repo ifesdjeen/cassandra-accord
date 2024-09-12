@@ -20,7 +20,6 @@ package accord.impl.basic;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -67,7 +66,6 @@ import org.agrona.collections.LongArrayList;
 
 import static accord.local.Status.Truncated;
 import static accord.utils.Invariants.illegalState;
-
 
 public class Journal implements Runnable
 {
@@ -804,4 +802,5 @@ public class Journal implements Runnable
             return "" + value;
         }
     }
+
 }

@@ -221,7 +221,7 @@ public abstract class SafeCommandStore
         updateCommandsForKey(prev, updated);
     }
 
-    private void updateMaxConflicts(Command prev, Command updated)
+    public void updateMaxConflicts(Command prev, Command updated)
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
@@ -235,7 +235,7 @@ public abstract class SafeCommandStore
         commandStore().updateMaxConflicts(prev, updated);
     }
 
-    private void updateCommandsForKey(Command prev, Command next)
+    public void updateCommandsForKey(Command prev, Command next)
     {
         if (!CommandsForKey.needsUpdate(prev, next))
             return;

@@ -19,7 +19,6 @@
 package accord.impl;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -43,19 +42,27 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
-
-import accord.api.LocalListeners;
-import accord.impl.progresslog.DefaultProgressLog;
-import accord.local.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.Key;
+import accord.api.LocalListeners;
 import accord.api.ProgressLog;
+import accord.impl.progresslog.DefaultProgressLog;
+import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.KeyHistory;
+import accord.local.Node;
+import accord.local.NodeTimeService;
+import accord.local.PreLoadContext;
+import accord.local.RedundantStatus;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
+import accord.local.SaveStatus;
+import accord.local.Status;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractKeys;
 import accord.primitives.Deps;
@@ -80,17 +87,17 @@ import accord.utils.async.AsyncChains;
 
 import static accord.local.SafeCommandStore.TestDep.ANY_DEPS;
 import static accord.local.SafeCommandStore.TestDep.WITH;
-import static accord.local.SafeCommandStore.TestStatus.ANY_STATUS;
 import static accord.local.SafeCommandStore.TestStartedAt.STARTED_BEFORE;
+import static accord.local.SafeCommandStore.TestStatus.ANY_STATUS;
 import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.Erased;
 import static accord.local.SaveStatus.ErasedOrInvalidOrVestigial;
 import static accord.local.SaveStatus.ReadyToExecute;
 import static accord.local.Status.Applied;
+import static accord.local.Status.NotDefined;
 import static accord.local.Status.PreCommitted;
 import static accord.local.Status.Stable;
 import static accord.local.Status.Truncated;
-import static accord.local.Status.NotDefined;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 import static java.lang.String.format;
