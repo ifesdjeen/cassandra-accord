@@ -235,6 +235,11 @@ public abstract class SafeCommandStore
         commandStore().updateMaxConflicts(prev, updated);
     }
 
+    public void updateRejectBefore(Command prev, Command updated)
+    {
+        commandStore().updateRejectBefore(prev, updated);
+    }
+
     public void updateCommandsForKey(Command prev, Command next)
     {
         if (!CommandsForKey.needsUpdate(prev, next))

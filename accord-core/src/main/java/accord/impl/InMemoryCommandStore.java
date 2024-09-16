@@ -58,6 +58,7 @@ import accord.local.KeyHistory;
 import accord.local.Node;
 import accord.local.NodeTimeService;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -1321,6 +1322,8 @@ public abstract class InMemoryCommandStore extends CommandStore
         for (TxnId txnId : commands.keySet())
             progressLog.clear(txnId);
         commands.clear();
+        //redundantBefore = RedundantBefore.EMPTY;
+        setRejectBefore(null);
         commandsByExecuteAt.clear();
         commandsForKey.clear();
         rangeCommands.clear();
@@ -1361,7 +1364,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                          context,
                          safeStore -> {
                              safeStore.replay(() -> {
-                                 ((InMemorySafeStore) safeStore).update(prev, loading);
+                                 safeStore.updateMaxConflicts(prev, loading);
+                                 safeStore.updateCommandsForKey(prev, loading);
+                                 safeStore.updateRejectBefore(prev, loading);
                              });
 
                              return null;

@@ -73,6 +73,7 @@ import static accord.api.ConfigurationService.EpochReady.DONE;
 import static accord.local.KeyHistory.COMMANDS;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.PreLoadContext.empty;
+import static accord.local.Status.PreAccepted;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -154,7 +155,7 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): schedule regular pruning of these collections
     // bootstrapBeganAt and shardDurableAt are both canonical data sets mostly used for debugging / constructing
     private NavigableMap<TxnId, Ranges> bootstrapBeganAt = ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
-    private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
+    protected RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     // TODO (expected): store this only once per node
     private DurableBefore durableBefore = DurableBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
@@ -294,6 +295,16 @@ public abstract class CommandStore implements AgentExecutor
         if (prev != null && prev.executeAt() != null && prev.executeAt().compareTo(executeAt) >= 0) return;
 
         setMaxConflicts(maxConflicts.update(keysOrRanges, executeAt));
+    }
+
+    protected void updateRejectBefore(Command prev, Command updated)
+    {
+        if (updated.txnId().kind() == ExclusiveSyncPoint && updated.status() == PreAccepted)
+        {
+            ReducingRangeMap<Timestamp> newRejectBefore = rejectBefore != null ? rejectBefore : new ReducingRangeMap<>();
+            newRejectBefore = ReducingRangeMap.add(newRejectBefore, (Ranges) updated.partialTxn().keys(), updated.txnId(), Timestamp::max);
+            setRejectBefore(newRejectBefore);
+        }
     }
 
     /**

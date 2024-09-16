@@ -58,10 +58,7 @@ import javax.annotation.Nullable;
 
 import static accord.local.Command.AbstractCommand.validate;
 import static accord.local.SaveStatus.AcceptedInvalidate;
-import static accord.local.SaveStatus.Applied;
-import static accord.local.SaveStatus.Applying;
 import static accord.local.SaveStatus.ErasedOrInvalidOrVestigial;
-import static accord.local.SaveStatus.PreApplied;
 import static accord.local.SaveStatus.Uninitialised;
 import static accord.local.Status.Durability.Local;
 import static accord.local.Status.Durability.NotDurable;
@@ -206,10 +203,6 @@ public abstract class Command implements CommonAttributes
             this.route = route;
             this.additionalKeysOrRanges = additionalKeysOrRanges;
             this.promised = promised;
-            if (status == PreApplied || status == Applying)
-                new RuntimeException().printStackTrace();
-            System.out.println(this.toString());
-//            new RuntimeException(this.toString()).printStackTrace();
         }
 
         private AbstractCommand(CommonAttributes common, SaveStatus status, Ballot promised)
@@ -220,10 +213,6 @@ public abstract class Command implements CommonAttributes
             this.route = common.route();
             this.additionalKeysOrRanges = common.additionalKeysOrRanges();
             this.promised = promised;
-            if (status == PreApplied || status == Applying)
-                new RuntimeException().printStackTrace();
-            System.out.println(this.toString());
-//            new RuntimeException(this.toString()).printStackTrace();
         }
 
         @Override
