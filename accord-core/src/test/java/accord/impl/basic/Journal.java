@@ -46,6 +46,7 @@ import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.CommonAttributes;
 import accord.local.Node;
+import accord.local.RedundantBefore;
 import accord.local.SaveStatus;
 import accord.local.Status;
 import accord.messages.Message;
@@ -331,15 +332,16 @@ public class Journal implements Runnable
             try
             {
                 Command prev = null;
-                for (Command command : commands)
+                for (int i = 0; i < commands.size(); i++)
                 {
+                    Command command = commands.get(i);
                     if (prev == null)
                         prev = Command.NotDefined.uninitialised(command.txnId());
 
                     // Only last command is allowed to have side-effects
                     if (command == last)
                         loading = false;
-                    consumer.load(prev, command);
+                    consumer.load(prev, command, diffs.get(i).redundantBefore);
                     prev = command;
                 }
             }
@@ -556,7 +558,7 @@ public class Journal implements Runnable
         this.historicalTransactions.computeIfAbsent(commandStoreId, (k) -> new ArrayList<>()).add(deps);
     }
 
-    public void onExecute(int commandStoreId, Command before, Command after, boolean isPrimary)
+    public void onExecute(int commandStoreId, Command before, Command after, RedundantBefore redundantBefore, boolean isPrimary)
     {
         if (loading || (before == null && after == null))
             return;
@@ -568,6 +570,7 @@ public class Journal implements Runnable
             return;
         }
         Diff diff = diff(before, after);
+        diff.redundantBefore = redundantBefore;
         if (!isPrimary)
             diff = diff.asNonPrimary();
 
@@ -601,6 +604,7 @@ public class Journal implements Runnable
 
     private static class Diff
     {
+        public RedundantBefore redundantBefore;
         public final NewValue<TxnId> txnId;
 
         public final NewValue<Timestamp> executeAt;

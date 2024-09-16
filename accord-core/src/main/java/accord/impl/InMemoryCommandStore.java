@@ -1322,7 +1322,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         for (TxnId txnId : commands.keySet())
             progressLog.clear(txnId);
         commands.clear();
-        //redundantBefore = RedundantBefore.EMPTY;
+        redundantBefore = RedundantBefore.EMPTY;
         setRejectBefore(null);
         commandsByExecuteAt.clear();
         commandsForKey.clear();
@@ -1332,11 +1332,11 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     public interface Load
     {
-        void load(Command prev, Command loading);
+        void load(Command prev, Command loading, RedundantBefore redundantBefore);
     }
 
     @VisibleForTesting
-    public boolean load(Command prev, Command loading)
+    public boolean load(Command prev, Command loading, RedundantBefore redundantBefore)
     {
         GlobalCommand globalCommand = command(loading.txnId());
         globalCommand.value(loading);
@@ -1367,6 +1367,8 @@ public abstract class InMemoryCommandStore extends CommandStore
                                  safeStore.updateMaxConflicts(prev, loading);
                                  safeStore.updateCommandsForKey(prev, loading);
                                  safeStore.updateRejectBefore(prev, loading);
+                                 if (redundantBefore != null)
+                                     safeStore.commandStore().setRedundantBefore(redundantBefore);
                              });
 
                              return null;

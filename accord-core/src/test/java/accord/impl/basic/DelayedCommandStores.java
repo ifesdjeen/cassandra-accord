@@ -301,7 +301,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
                 Command before = safe.original();
                 Command after = safe.current();
-                commandStore.journal.onExecute(commandStore.id(), before, after, Objects.equals(context.primaryTxnId(), after.txnId()));
+                commandStore.journal.onExecute(commandStore.id(), before, after, commandStore.redundantBefore(), Objects.equals(context.primaryTxnId(), after.txnId()));
                 commandStore.validateRead(safe.current());
             });
             super.postExecute();

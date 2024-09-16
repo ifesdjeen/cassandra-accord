@@ -273,7 +273,7 @@ public abstract class CommandStore implements AgentExecutor
     /**
      * To be overridden by implementations, to ensure the new state is persisted.
      */
-    protected void setRedundantBefore(RedundantBefore newRedundantBefore)
+    public void setRedundantBefore(RedundantBefore newRedundantBefore)
     {
         this.redundantBefore = newRedundantBefore;
     }
