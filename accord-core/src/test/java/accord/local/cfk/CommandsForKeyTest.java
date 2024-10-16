@@ -61,6 +61,7 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
@@ -90,6 +91,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResults;
 
 import static accord.local.Command.NotDefined.notDefined;
+import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Status.Durability.NotDurable;
 
@@ -636,7 +638,7 @@ public class CommandsForKeyTest
                 if (!CommandsForKey.managesExecution(update.next.txnId()) && update.next.hasBeen(Status.Stable) && !update.next.hasBeen(Status.Truncated))
                 {
                     CommandsForKey prev = safeCfk.current();
-                    result = prev.registerUnmanaged(safeCommand);
+                    result = prev.registerUnmanaged(safeCommand, REGISTER);
                     safeCfk.set(result.cfk());
                     result.postProcess(safeStore, prev, null, canon);
                 }
@@ -961,10 +963,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        protected void registerHistoricalTransactions(Range range, Deps deps, SafeCommandStore safeStore)
-        {
-            throw new UnsupportedOperationException();
-        }
+        protected void registerTransitive(SafeCommandStore safeStore, RangeDeps deps){ }
 
         @Override
         public <T> AsyncChain<T> submit(Callable<T> task)
