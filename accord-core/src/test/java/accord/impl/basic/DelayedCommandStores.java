@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
@@ -33,6 +32,7 @@ import com.google.common.collect.Iterables;
 
 import accord.api.Agent;
 import accord.api.DataStore;
+import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
@@ -65,6 +65,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
+import static accord.api.Journal.CommandUpdate;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 
@@ -153,7 +154,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 return;
 
             // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
-            Command reconstructed = journal.reconstruct(id, current.txnId());
+            Command reconstructed = journal.loadCommand(id, current.txnId(), unsafeGetRedundantBefore(), durableBefore());
             List<Difference<?>> diff = ReflectionUtils.recursiveEquals(current, reconstructed);
             Invariants.checkState(diff.isEmpty(), "Commands did not match: expected %s, given %s, node %s, store %d, diff %s", current, reconstructed, node, id(), new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
         }
@@ -283,7 +284,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
                 Command before = safe.original();
                 Command after = safe.current();
-                commandStore.journal.onExecute(commandStore.id(), before, after, Objects.equals(context.primaryTxnId(), after.txnId()));
+                commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> {});
                 commandStore.validateRead(safe.current());
             });
             super.postExecute();
