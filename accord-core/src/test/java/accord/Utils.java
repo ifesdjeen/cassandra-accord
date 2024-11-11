@@ -23,25 +23,25 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import accord.api.Agent;
 import com.google.common.collect.Sets;
 
+import accord.api.Agent;
 import accord.api.Key;
+import accord.api.LocalConfig;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
-import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
+import accord.impl.DefaultLocalListeners;
+import accord.impl.DefaultRemoteListeners;
 import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
-import accord.impl.DefaultLocalListeners;
-import accord.impl.progresslog.DefaultProgressLogs;
-import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TestAgent;
 import accord.impl.list.ListQuery;
@@ -50,6 +50,7 @@ import accord.impl.list.ListUpdate;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockConfigurationService;
 import accord.impl.mock.MockStore;
+import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -132,9 +133,10 @@ public class Utils
 
     public static Txn listWriteTxn(Id client, Keys keys)
     {
-        ListUpdate update = new ListUpdate(Function.identity());
+        TreeMap<Key, Integer> map = new TreeMap<>();
         for (Key k : keys)
-            update.put(k, 1);
+            map.put(k, 1);
+        ListUpdate update = new ListUpdate(Function.identity());
         ListRead read = new ListRead(Function.identity(), false, keys, keys);
         ListQuery query = new ListQuery(client, keys.size(), false);
         return new Txn.InMemory(keys, read, query, update);
@@ -202,6 +204,11 @@ public class Utils
         return node;
     }
 
+    public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
+    {
+        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, new MockCluster.Clock(0), LocalConfig.DEFAULT);
+    }
+
     public static void spinUntilSuccess(ThrowingRunnable runnable)
     {
         spinUntilSuccess(runnable, 10);
@@ -215,10 +222,5 @@ public class Utils
                   .atMost(timeoutInSeconds, TimeUnit.SECONDS)
                   .ignoreExceptions()
                   .untilAsserted(runnable);
-    }
-
-    public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
-    {
-        return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, new MockCluster.Clock(0), LocalConfig.DEFAULT);
     }
 }
