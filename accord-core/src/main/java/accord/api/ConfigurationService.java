@@ -103,6 +103,18 @@ public interface ConfigurationService
         {
             return new EpochReady(epoch, DONE, DONE, DONE, DONE);
         }
+
+        @Override
+        public String toString()
+        {
+            return "EpochReady{" +
+                   "epoch=" + epoch +
+                   ", metadata=" + metadata +
+                   ", fastPath=" + fastPath +
+                   ", data=" + data +
+                   ", reads=" + reads +
+                   '}';
+        }
     }
 
 
