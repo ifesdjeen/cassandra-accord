@@ -48,11 +48,11 @@ import accord.api.LocalConfig;
 import accord.api.LocalListeners;
 import accord.api.MessageSink;
 import accord.api.ProgressLog;
-import accord.api.Timeouts;
 import accord.api.RemoteListeners;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
+import accord.api.Timeouts;
 import accord.api.TopologySorter;
 import accord.coordinate.CoordinateEphemeralRead;
 import accord.coordinate.CoordinateTransaction;
@@ -683,10 +683,15 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncResult<Result> coordinate(TxnId txnId, Txn txn)
     {
+        return coordinate(txnId, txn, txnId.epoch(), Long.MAX_VALUE);
+    }
+
+    public AsyncResult<Result> coordinate(TxnId txnId, Txn txn, long minEpoch, long deadlineNanos)
+    {
         // TODO (desirable, consider): The combination of updating the epoch of the next timestamp with epochs we don't have topologies for,
         //  and requiring preaccept to talk to its topology epoch means that learning of a new epoch via timestamp
         //  (ie not via config service) will halt any new txns from a node until it receives this topology
-        AsyncResult<Result> result = withEpoch(txnId.epoch(), () -> initiateCoordination(txnId, txn)).beginAsResult();
+        AsyncResult<Result> result = withEpoch(Math.max(txnId.epoch(), minEpoch), () -> initiateCoordination(txnId, txn)).beginAsResult();
         coordinating.putIfAbsent(txnId, result);
         result.addCallback((success, fail) -> coordinating.remove(txnId, result));
         return result;

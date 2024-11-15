@@ -37,9 +37,9 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
 import static accord.primitives.Txn.Kind.Kinds.AnyGloballyVisible;
+import static accord.primitives.Txn.Kind.Kinds.ExclusiveSyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Nothing;
 import static accord.primitives.Txn.Kind.Kinds.RsOrWs;
-import static accord.primitives.Txn.Kind.Kinds.ExclusiveSyncPoints;
 import static accord.primitives.Txn.Kind.Kinds.Ws;
 import static accord.primitives.Txn.Kind.Kinds.WsOrSyncPoints;
 
@@ -186,11 +186,6 @@ public interface Txn
         public boolean isWrite()
         {
             return this == Write;
-        }
-
-        public boolean isRead()
-        {
-            return this == Read;
         }
 
         public boolean isDurable()
