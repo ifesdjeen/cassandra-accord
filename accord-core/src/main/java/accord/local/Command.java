@@ -22,19 +22,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
-import accord.primitives.SaveStatus;
-import accord.primitives.Status;
-import accord.primitives.Status.Durability;
-import accord.primitives.Known;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.KeyDeps;
+import accord.primitives.Known;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -43,6 +41,9 @@ import accord.primitives.Ranges;
 import accord.primitives.Routable;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
+import accord.primitives.SaveStatus;
+import accord.primitives.Status;
+import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -54,12 +55,13 @@ import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
 
-import javax.annotation.Nonnull;
-
 import com.google.common.annotations.VisibleForTesting;
 
 import static accord.local.Command.AbstractCommand.validate;
+import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.Uninitialised;
@@ -68,10 +70,7 @@ import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.ShardUniversal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Status.Stable;
-import static accord.primitives.Routable.Domain.Range;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
 import static accord.utils.Invariants.ParanoiaCostFactor.LOW;
@@ -284,7 +283,7 @@ public abstract class Command implements CommonAttributes
                     case DefinitionErased:
                     case DefinitionUnknown:
                     case NoOp:
-                        Invariants.checkState(partialTxn == null, "partialTxn is defined");
+                        Invariants.checkState(partialTxn == null, "partialTxn is defined %s", validate);
                         break;
                     case DefinitionKnown:
                         Invariants.checkState(partialTxn != null || validate.participants().owns().isEmpty(), "partialTxn is null");
@@ -1263,6 +1262,41 @@ public abstract class Command implements CommonAttributes
         }
     }
 
+    public static class Minimal
+    {
+        public final TxnId txnId;
+        public final SaveStatus saveStatus;
+        public final StoreParticipants participants;
+        public final Status.Durability durability;
+        public final Timestamp executeAt;
+        public final Writes writes;
+
+        public Minimal(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Status.Durability durability, Timestamp executeAt, Writes writes)
+        {
+            this.txnId = txnId;
+            this.saveStatus = saveStatus;
+            this.participants = participants;
+            this.durability = durability;
+            this.executeAt = executeAt;
+            this.writes = writes;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            Minimal minimal = (Minimal) object;
+            return Objects.equals(txnId, minimal.txnId) && saveStatus == minimal.saveStatus && Objects.equals(participants, minimal.participants) && durability == minimal.durability && Objects.equals(executeAt, minimal.executeAt) && Objects.equals(writes, minimal.writes);
+        }
+
+        @Override
+        public final int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
+    }
+
     public static class WaitingOn
     {
         private static final WaitingOn EMPTY_FOR_KEY = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, KeyDeps.NONE, ImmutableBitSet.EMPTY, null);
@@ -1495,7 +1529,7 @@ public abstract class Command implements CommonAttributes
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Minimal), update, (upd, idx) -> {
+                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Slice.Minimal), update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
                                 // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
                                 // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
@@ -1528,7 +1562,7 @@ public abstract class Command implements CommonAttributes
             @VisibleForTesting
             public static Update unsafeInitialise(TxnId txnId, Ranges executeRanges, Route<?> route, Deps deps)
             {
-                Unseekables<?> executionParticipants = route.slice(executeRanges, Minimal);
+                Unseekables<?> executionParticipants = route.slice(executeRanges, Slice.Minimal);
                 Update update = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps);
                 // TODO (expected): refactor this to operate only on participants, not ranges
                 deps.rangeDeps.forEach(executionParticipants, update, Update::initialise);

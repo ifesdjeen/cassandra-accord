@@ -29,6 +29,7 @@ import accord.local.RedundantBefore;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.PersistentField.Persister;
 
 /**
  * Persisted journal for transactional recovery.
@@ -36,6 +37,8 @@ import accord.primitives.TxnId;
 public interface Journal
 {
     Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
+
     // TODO (required): use OnDone instead of Runnable
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
@@ -46,6 +49,8 @@ public interface Journal
     NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId);
     NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId);
     CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId);
+
+    Persister<DurableBefore, DurableBefore> durableBeforePersister();
 
     void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
 
@@ -80,6 +85,13 @@ public interface Journal
                    ", newRangesForEpoch=" + newRangesForEpoch +
                    '}';
         }
+    }
+
+    enum Load
+    {
+        ALL,
+        PURGEABLE,
+        MINIMAL
     }
 
     /**

@@ -34,6 +34,7 @@ import accord.local.RedundantBefore;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.PersistentField;
 
 /**
  * Logging journal, a wrapper over journal for debugging / inspecting history purposes.
@@ -70,46 +71,66 @@ public class LoggingJournal implements Journal
         }
     }
 
+    @Override
     public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         return delegate.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
     }
 
+    @Override
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        return delegate.loadMinimal(commandStoreId, txnId, load, redundantBefore, durableBefore);
+    }
+
+    @Override
     public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
         log("%d: %s\n", store, update.after);
         delegate.saveCommand(store, update, onFlush);
     }
 
+    @Override
     public void purge(CommandStores commandStores)
     {
         log("PURGE\n");
         delegate.purge(commandStores);
     }
 
+    @Override
     public void replay(CommandStores commandStores)
     {
         delegate.replay(commandStores);
     }
 
+    @Override
     public RedundantBefore loadRedundantBefore(int commandStoreId)
     {
         return delegate.loadRedundantBefore(commandStoreId);
     }
 
+    @Override
     public NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId)
     {
         return delegate.loadBootstrapBeganAt(commandStoreId);
     }
 
+    @Override
     public NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId)
     {
         return delegate.loadSafeToRead(commandStoreId);
     }
 
+    @Override
     public CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId)
     {
         return delegate.loadRangesForEpoch(commandStoreId);
+    }
+
+    @Override
+    public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister()
+    {
+        return delegate.durableBeforePersister();
     }
 
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
