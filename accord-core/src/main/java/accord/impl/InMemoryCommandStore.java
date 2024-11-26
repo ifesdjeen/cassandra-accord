@@ -61,7 +61,6 @@ import accord.local.KeyHistory;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
-import accord.local.RedundantBefore;
 import accord.local.RedundantStatus;
 import accord.local.RejectBefore;
 import accord.local.SafeCommand;
@@ -191,7 +190,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     if (cur.saveStatus() == ReadyToExecute || cur.saveStatus() == Applying) // TODO (desired): only run the check once
                     {
                         long epoch = cur.executeAt().epoch();
-                        Ranges ranges = safeStore.ranges().allAt(epoch);
+                        Ranges ranges = safeStore.rangesForEpoch().allAt(epoch);
                         Participants<?> participants = cur.route().participants(ranges, Minimal);
                         // TODO (testing): look forwards also, but we only need to look at ?=ReadyToExecute transactions as they have already run their backwards checks
                         Iterator<GlobalCommand> iter = commandsByExecuteAt.descendingMap().tailMap(cur.executeAt(), false).values().iterator();
@@ -209,7 +208,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                             if (prevExecuteAt.epoch() < epoch)
                             {
                                 epoch = prevExecuteAt.epoch();
-                                ranges = ranges.slice(safeStore.ranges().allAt(epoch), Minimal);
+                                ranges = ranges.slice(safeStore.rangesForEpoch().allAt(epoch), Minimal);
                                 participants = participants.slice(ranges, Minimal);
                             }
 
@@ -395,7 +394,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (!command.hasBeen(PreCommitted)) continue;
                 if (!command.txnId().isVisible()) continue;
 
-                Ranges allRanges = unsafeRangesForEpoch().allBetween(txnId.epoch(), command.executeAtOrTxnId().epoch());
+                Ranges allRanges = unsafeGetRangesForEpoch().allBetween(txnId.epoch(), command.executeAtOrTxnId().epoch());
                 boolean done = command.hasBeen(Truncated);
                 if (!done)
                 {
@@ -699,11 +698,9 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     public static class InMemorySafeStore extends AbstractSafeCommandStore<InMemorySafeCommand, InMemorySafeTimestampsForKey, InMemorySafeCommandsForKey, InMemoryCommandStoreCaches>
     {
-        private final InMemoryCommandStore commandStore;
         protected final Map<TxnId, InMemorySafeCommand> commands;
         private final Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey;
         private final Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey;
-        private RangesForEpoch ranges;
 
         public InMemorySafeStore(InMemoryCommandStore commandStore,
                                  RangesForEpoch ranges,
@@ -712,12 +709,12 @@ public abstract class InMemoryCommandStore extends CommandStore
                                  Map<RoutableKey, InMemorySafeTimestampsForKey> timestampsForKey,
                                  Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey)
         {
-            super(context);
-            this.commandStore = commandStore;
+            super(context, commandStore);
+
+            super.setRangesForEpoch(ranges);
             this.commands = commands;
             this.commandsForKey = commandsForKey;
             this.timestampsForKey = timestampsForKey;
-            this.ranges = ranges;
             for (InMemorySafeCommand cmd : commands.values())
             {
                 if (cmd.isUnset()) cmd.uninitialised();
@@ -739,10 +736,16 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
+        public InMemoryCommandStore commandStore()
+        {
+            return (InMemoryCommandStore) super.commandStore();
+        }
+
+        @Override
         protected InMemoryCommandStoreCaches tryGetCaches()
         {
-            if (commandStore.canExposeUnloaded())
-                return commandStore.new InMemoryCommandStoreCaches();
+            if (commandStore().canExposeUnloaded())
+                return commandStore().new InMemoryCommandStoreCaches();
             return null;
         }
 
@@ -796,58 +799,33 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return;
 
             Ranges slice = ranges(txnId, updated.executeAtOrTxnId());
-            slice = commandStore.unsafeGetRedundantBefore().removeShardRedundant(txnId, updated.executeAtOrTxnId(), slice);
-            commandStore.rangeCommands.computeIfAbsent(txnId, ignore -> new RangeCommand(commandStore.commands.get(txnId)))
+            slice = commandStore().unsafeGetRedundantBefore().removeShardRedundant(txnId, updated.executeAtOrTxnId(), slice);
+            commandStore().rangeCommands.computeIfAbsent(txnId, ignore -> new RangeCommand(commandStore().commands.get(txnId)))
                          .update(((AbstractRanges)updated.participants().touches()).toRanges().slice(slice, Minimal));
-        }
-
-        @Override
-        public CommandStore commandStore()
-        {
-            return commandStore;
         }
 
         @Override
         public DataStore dataStore()
         {
-            return commandStore.store;
+            return commandStore().store;
         }
 
         @Override
         public Agent agent()
         {
-            return commandStore.agent;
+            return commandStore().agent;
         }
 
         @Override
         public ProgressLog progressLog()
         {
-            return commandStore.progressLog;
-        }
-
-        @Override
-        public RangesForEpoch ranges()
-        {
-            return ranges;
-        }
-
-        @Override
-        public void setRangesForEpoch(RangesForEpoch rangesForEpoch)
-        {
-            super.setRangesForEpoch(rangesForEpoch);
-            ranges = rangesForEpoch;
-        }
-
-        @Override
-        public void upsertRedundantBefore(RedundantBefore addRedundantBefore)
-        {
-            unsafeUpsertRedundantBefore(addRedundantBefore);
+            return commandStore().progressLog;
         }
 
         @Override
         public NodeCommandStoreService node()
         {
-            return commandStore.node;
+            return commandStore().node;
         }
 
         private static class TxnInfo
@@ -878,7 +856,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public <P1, T> T mapReduceActive(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, CommandFunction<P1, T, T> map, P1 p1, T accumulate)
         {
-            accumulate = commandStore.mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
+            accumulate = commandStore().mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
                 return commands.mapReduceActive(keysOrRanges, startedBefore, testKind, map, p1, prev);
             }, accumulate);
 
@@ -889,7 +867,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         @Override
         public <P1, T> T mapReduceFull(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, TestStartedAt testStartedAt, TestDep testDep, TestStatus testStatus, CommandFunction<P1, T, T> map, P1 p1, T accumulate)
         {
-            accumulate = commandStore.mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
+            accumulate = commandStore().mapReduceForKey(this, keysOrRanges, (commands, prev) -> {
                 return commands.mapReduceFull(keysOrRanges, testTxnId, testKind, testStartedAt, testDep, testStatus, map, p1, prev);
             }, accumulate);
 
@@ -900,7 +878,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             // TODO (find lib, efficiency): this is super inefficient, need to store Command in something queryable
             Map<Range, List<TxnInfo>> collect = new TreeMap<>(Range::compare);
-            commandStore.rangeCommands.forEach(((txnId, rangeCommand) -> {
+            commandStore().rangeCommands.forEach(((txnId, rangeCommand) -> {
                 Command command = rangeCommand.command.value();
                 // TODO (now): probably this isn't safe - want to ensure we take dependency on any relevant syncId
                 if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
@@ -979,7 +957,7 @@ public abstract class InMemoryCommandStore extends CommandStore
 
             if (testStatus == ANY_STATUS && testDep == ANY_DEPS)
             {
-                commandStore.historicalRangeCommands.forEach(((txnId, ranges) -> {
+                commandStore().historicalRangeCommands.forEach(((txnId, ranges) -> {
                     switch (testStartedAt)
                     {
                         default: throw new AssertionError();
@@ -1003,7 +981,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                         List<TxnInfo> list = in.computeIfAbsent(r, ignore -> new ArrayList<>());
                         if (list.isEmpty() || !list.get(list.size() - 1).txnId.equals(txnId))
                         {
-                            GlobalCommand global = commandStore.commands.get(txnId);
+                            GlobalCommand global = commandStore().commands.get(txnId);
                             if (global != null && global.value() != null)
                             {
                                 Command command = global.value();
@@ -1035,6 +1013,7 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         public void postExecute()
         {
+            super.postExecute();
             commands.values().forEach(c -> {
                 if (c == null || c.current() == null)
                     return;
@@ -1042,24 +1021,24 @@ public abstract class InMemoryCommandStore extends CommandStore
                 Timestamp executeAt = c.current().executeAtIfKnown();
                 if (executeAt != null)
                 {
-                    if (c.current().hasBeen(Truncated)) commandStore.commandsByExecuteAt.remove(executeAt);
-                    else commandStore.commandsByExecuteAt.put(executeAt, commandStore.command(c.txnId()));
+                    if (c.current().hasBeen(Truncated)) commandStore().commandsByExecuteAt.remove(executeAt);
+                    else commandStore().commandsByExecuteAt.put(executeAt, commandStore().command(c.txnId()));
                 }
 
                 if (c.isUnset() || c.current().saveStatus().isUninitialised())
-                    commandStore.commands.remove(c.txnId());
+                    commandStore().commands.remove(c.txnId());
 
                 c.invalidate();
             });
 
             timestampsForKey.values().forEach(tfk -> {
                 if (tfk.isUnset())
-                    commandStore.timestampsForKey.remove(tfk.key());
+                    commandStore().timestampsForKey.remove(tfk.key());
                 tfk.invalidate();
             });
             commandsForKey.values().forEach(cfk -> {
                 if (cfk.isUnset())
-                    commandStore.commandsForKey.remove(cfk.key());
+                    commandStore().commandsForKey.remove(cfk.key());
                 cfk.invalidate();
             });
         }

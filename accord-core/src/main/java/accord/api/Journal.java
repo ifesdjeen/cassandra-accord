@@ -45,7 +45,7 @@ public interface Journal
     RedundantBefore loadRedundantBefore(int commandStoreId);
     NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId);
     NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId);
-    CommandStores.RangesForEpoch.Snapshot loadRangesForEpoch(int commandStoreId);
+    CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId);
 
     void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
 
@@ -69,7 +69,7 @@ public interface Journal
         public RedundantBefore newRedundantBefore;
         public NavigableMap<TxnId, Ranges> newBootstrapBeganAt;
         public NavigableMap<Timestamp, Ranges> newSafeToRead;
-        public CommandStores.RangesForEpoch.Snapshot newRangesForEpoch;
+        public CommandStores.RangesForEpoch newRangesForEpoch;
 
         public String toString()
         {

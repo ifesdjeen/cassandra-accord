@@ -441,6 +441,6 @@ public class RemoteListenersTest
         @Override public Agent agent() { return null; }
         @Override public ProgressLog progressLog() { return null; }
         @Override public NodeCommandStoreService node() { return null; }
-        @Override public CommandStores.RangesForEpoch ranges() { return null; }
+        @Override public CommandStores.RangesForEpoch rangesForEpoch() { return null; }
     }
 }

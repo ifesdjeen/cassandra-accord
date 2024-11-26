@@ -846,7 +846,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public CommandStores.RangesForEpoch ranges()
+        public CommandStores.RangesForEpoch rangesForEpoch()
         {
             throw new UnsupportedOperationException();
         }

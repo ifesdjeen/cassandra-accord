@@ -281,7 +281,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
             case PreAccepted:
                 // only preaccept if we coordinate the transaction
-                if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
+                if (safeStore.rangesForEpoch().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
                     Commands.preaccept(safeStore, safeCommand, participants, txnId, txnId.epoch(), partialTxn, Route.castToFullRoute(route));
                 break;
 
@@ -349,7 +349,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         // 1) we have already applied it locally; 2) the command doesn't apply locally; 3) we are stale; or 4) the command is invalidated
         if (executeAtIfKnown == null)
         {
-            Ranges ranges = safeStore.ranges().allSince(txnId.epoch());
+            Ranges ranges = safeStore.rangesForEpoch().allSince(txnId.epoch());
             ranges = safeStore.redundantBefore().everExpectToExecute(txnId, ranges);
             if (!ranges.isEmpty())
             {
@@ -368,7 +368,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         // compute the ranges we expect to execute - i.e. those we own, and are not stale or pre-bootstrap
         // TODO (required): use StoreParticipants.executes
-        Ranges ranges = safeStore.ranges().allAt(executeAtIfKnown.epoch());
+        Ranges ranges = safeStore.rangesForEpoch().allAt(executeAtIfKnown.epoch());
         ranges = safeStore.redundantBefore().expectToExecute(txnId, executeAtIfKnown, ranges);
         if (ranges.isEmpty() || (executes = executes.slice(ranges, Minimal)).isEmpty())
         {

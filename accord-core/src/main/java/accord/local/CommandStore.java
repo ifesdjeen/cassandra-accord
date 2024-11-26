@@ -144,7 +144,7 @@ public abstract class CommandStore implements AgentExecutor
     protected final LocalListeners listeners;
     protected final EpochUpdateHolder epochUpdateHolder;
 
-    // Used in markShardStale to make sure the staleness includes in progresss bootstraps
+    // Used in markShardStale to make sure the staleness includes in progress bootstraps
     private transient NavigableMap<TxnId, Ranges> bootstrapBeganAt = ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
@@ -242,7 +242,7 @@ public abstract class CommandStore implements AgentExecutor
             unsafeSetRangesForEpoch(update.newRangesForEpoch);
     }
 
-    public RangesForEpoch unsafeRangesForEpoch()
+    public RangesForEpoch unsafeGetRangesForEpoch()
     {
         return rangesForEpoch;
     }
@@ -360,6 +360,7 @@ public abstract class CommandStore implements AgentExecutor
         // TODO (desired): narrow ranges to those that are owned
         Invariants.checkArgument(txnId.is(ExclusiveSyncPoint));
         RedundantBefore newRedundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(ranges, txnId, txnId, TxnId.NONE, TxnId.NONE, TxnId.NONE));
+        safeStore.upsertRedundantBefore(newRedundantBefore);
         unsafeSetRedundantBefore(newRedundantBefore);
         updatedRedundantBefore(safeStore, txnId, ranges);
     }
@@ -540,7 +541,7 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
     {
-        final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
+        final Ranges slicedRanges = durableRanges.slice(safeStore.rangesForEpoch().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedOrInvalidatedBefore);
         RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, TxnId.NONE, globalSyncId, TxnId.NONE, TxnId.NONE);
         safeStore.upsertRedundantBefore(addShardRedundant);
@@ -619,11 +620,11 @@ public abstract class CommandStore implements AgentExecutor
         Timestamp staleUntilAtLeast = staleSince;
         if (isSincePrecise)
         {
-            ranges = ranges.slice(safeStore.ranges().allAt(staleSince.epoch()), Minimal);
+            ranges = ranges.slice(safeStore.rangesForEpoch().allAt(staleSince.epoch()), Minimal);
         }
         else
         {
-            ranges = ranges.slice(safeStore.ranges().allSince(staleSince.epoch()), Minimal);
+            ranges = ranges.slice(safeStore.rangesForEpoch().allSince(staleSince.epoch()), Minimal);
             // make sure no in-progress bootstrap attempts will override the stale since for commands whose staleness bounds are unknown
             staleUntilAtLeast = Timestamp.max(bootstrapBeganAt.lastKey(), staleUntilAtLeast);
         }
@@ -647,15 +648,11 @@ public abstract class CommandStore implements AgentExecutor
         return () -> {
             AsyncResult<Void> done = execute(empty(), (safeStore) -> {
                 // Merge in a base for any ranges that needs to be covered
-                // TODO (review): Convoluted check to not overwrite existing bootstraps with TxnId.NONE
-                // If loading from disk didn't finish before this then we might initialize the range at TxnId.NONE?
-                // Does CommandStores.topology ensure that doesn't happen? Is it fine if it does because it will get superseded?
-
                 Ranges newBootstrapRanges = ranges;
                 for (Ranges existing : bootstrapBeganAt.values())
                     newBootstrapRanges = newBootstrapRanges.without(existing);
                 if (!newBootstrapRanges.isEmpty())
-                    bootstrapBeganAt = bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt);
+                    safeStore.setBootstrapBeganAt(bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt));
                 safeStore.setSafeToRead(purgeAndInsert(safeToRead, TxnId.NONE, ranges));
             }).beginAsResult();
 
