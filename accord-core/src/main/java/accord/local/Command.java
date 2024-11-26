@@ -279,7 +279,7 @@ public abstract class Command implements CommonAttributes
                     case DefinitionErased:
                     case DefinitionUnknown:
                     case NoOp:
-                        Invariants.checkState(partialTxn == null, "partialTxn is defined");
+                        Invariants.checkState(partialTxn == null, "partialTxn is defined %s", validate);
                         break;
                     case DefinitionKnown:
                         Invariants.checkState(partialTxn != null, "partialTxn is null");
