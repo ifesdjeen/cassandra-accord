@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
@@ -49,10 +50,13 @@ import accord.local.CommandStores;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.local.ShardDistributor;
 import accord.primitives.Range;
+import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
+import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
@@ -141,6 +145,38 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             this.executor = executor;
             this.cacheLoadingChance = cacheLoadingChance;
             this.journal = journal;
+        }
+
+        @Override
+        public void clearForTesting()
+        {
+            super.clearForTesting();
+
+            // Rather than cleaning up and reloading, we can just assert equality during reload
+            {
+                RedundantBefore orig = unsafeGetRedundantBefore();
+                RedundantBefore loaded = journal.loadRedundantBefore(id());
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                NavigableMap<TxnId, Ranges> orig = unsafeGetBootstrapBeganAt();
+                NavigableMap<TxnId, Ranges> loaded = journal.loadBootstrapBeganAt(id());
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                NavigableMap<Timestamp, Ranges> orig = unsafeGetSafeToRead();
+                NavigableMap<Timestamp, Ranges> loaded = journal.loadSafeToRead(id());
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                RangesForEpoch orig = unsafeGetRangesForEpoch();
+                RangesForEpoch loaded = journal.loadRangesForEpoch(id());
+
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
         }
 
         @Override
@@ -262,6 +298,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     {
         private final DelayedCommandStore commandStore;
         private final CacheLoadingChance cacheLoadingChance;
+
         public DelayedSafeStore(DelayedCommandStore commandStore,
                                 RangesForEpoch ranges,
                                 PreLoadContext context,
@@ -278,6 +315,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public void postExecute()
         {
+            Journal.FieldUpdates fieldUpdates = fieldUpdates();
+            if (fieldUpdates != null)
+                commandStore.journal.saveStoreState(commandStore.id(), fieldUpdates, () -> {});
+
             commands.entrySet().forEach(e -> {
                 InMemorySafeCommand safe = e.getValue();
                 if (!safe.isModified()) return;

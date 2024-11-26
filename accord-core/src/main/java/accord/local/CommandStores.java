@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -142,54 +143,46 @@ public abstract class CommandStores
     // We ONLY remove ranges to keep logic manageable; likely to only merge CommandStores into a new CommandStore via some kind of Bootstrap
     public static class RangesForEpoch
     {
-        public static class Snapshot
-        {
-            public final long[] epochs;
-            public final Ranges[] ranges;
-
-            public Snapshot(long[] epochs, Ranges[] ranges)
-            {
-                this.epochs = epochs;
-                this.ranges = ranges;
-            }
-
-            @Override
-            public boolean equals(Object o)
-            {
-                if (this == o) return true;
-                if (o == null || getClass() != o.getClass()) return false;
-                Snapshot snapshot = (Snapshot) o;
-                return Objects.deepEquals(epochs, snapshot.epochs) && Objects.deepEquals(ranges, snapshot.ranges);
-            }
-
-            @Override
-            public int hashCode()
-            {
-                return Objects.hash(Arrays.hashCode(epochs), Arrays.hashCode(ranges));
-            }
-        }
-
         final long[] epochs;
         final Ranges[] ranges;
-        final CommandStore store;
 
-        public RangesForEpoch(long epoch, Ranges ranges, CommandStore store)
+        public RangesForEpoch(long epoch, Ranges ranges)
         {
             this.epochs = new long[] { epoch };
             this.ranges = new Ranges[] { ranges };
-            this.store = store;
         }
 
-        public RangesForEpoch(long[] epochs, Ranges[] ranges, CommandStore store)
+        public RangesForEpoch(long[] epochs, Ranges[] ranges)
         {
+            Invariants.checkState(epochs.length == ranges.length);
             this.epochs = epochs;
             this.ranges = ranges;
-            this.store = store;
         }
 
-        public Snapshot snapshot()
+        public int size()
         {
-            return new Snapshot(epochs, ranges);
+            return epochs.length;
+        }
+
+        public void forEach(BiConsumer<Long, Ranges> forEach)
+        {
+            for (int i = 0; i < epochs.length; i++)
+                forEach.accept(epochs[i], ranges[i]);
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            RangesForEpoch that = (RangesForEpoch) object;
+            return Objects.deepEquals(epochs, that.epochs) && Objects.deepEquals(ranges, that.ranges);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
         }
 
         public RangesForEpoch withRanges(long epoch, Ranges latestRanges)
@@ -201,7 +194,7 @@ public abstract class CommandStores
             newEpochs[newLength - 1] = epoch;
             newRanges[newLength - 1] = latestRanges;
             Invariants.checkState(newEpochs[newLength - 1] == 0 || newEpochs[newLength - 1] == epoch, "Attempted to override historic epoch %d with %d", newEpochs[newLength - 1], epoch);
-            return new RangesForEpoch(newEpochs, newRanges, store);
+            return new RangesForEpoch(newEpochs, newRanges);
         }
 
         public @Nonnull Ranges coordinates(TxnId txnId)
@@ -463,7 +456,7 @@ public abstract class CommandStores
             {
                 EpochUpdateHolder updateHolder = new EpochUpdateHolder();
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
-                shard.ranges = new RangesForEpoch(epoch, addRanges, shard.store);
+                shard.ranges = new RangesForEpoch(epoch, addRanges);
                 shard.store.epochUpdateHolder.add(epoch, shard.ranges, addRanges);
                 shard.store.epochUpdateHolder.updateGlobal(newTopology.ranges());
 

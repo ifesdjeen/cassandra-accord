@@ -20,12 +20,25 @@ package accord.impl;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NavigableMap;
 
 import accord.api.RoutingKey;
-import accord.local.*;
+import accord.local.CommandStore;
+import accord.local.KeyHistory;
+import accord.local.PreLoadContext;
+import accord.local.RedundantBefore;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
 import accord.local.cfk.SafeCommandsForKey;
-import accord.primitives.*;
+import accord.primitives.Ranges;
+import accord.primitives.Routable;
+import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 
+import static accord.api.Journal.FieldUpdates;
+import static accord.local.CommandStores.RangesForEpoch;
 import static accord.local.KeyHistory.TIMESTAMPS;
 import static accord.utils.Invariants.illegalArgument;
 
@@ -37,9 +50,19 @@ extends SafeCommandStore
 {
     protected final PreLoadContext context;
 
-    public AbstractSafeCommandStore(PreLoadContext context)
+    private final CommandStore commandStore;
+    private FieldUpdates fieldUpdates;
+
+    protected AbstractSafeCommandStore(PreLoadContext context, CommandStore commandStore)
     {
         this.context = context;
+        this.commandStore = commandStore;
+    }
+
+    @Override
+    public CommandStore commandStore()
+    {
+        return commandStore;
     }
 
     public interface CommandStoreCaches<C, TFK, CFK> extends AutoCloseable
@@ -186,5 +209,100 @@ extends SafeCommandStore
 
     public void postExecute()
     {
+        if (fieldUpdates == null)
+            return;
+
+        if (fieldUpdates.newRedundantBefore != null)
+            super.unsafeSetRedundantBefore(fieldUpdates.newRedundantBefore);
+
+        if (fieldUpdates.newBootstrapBeganAt != null)
+            super.setBootstrapBeganAt(fieldUpdates.newBootstrapBeganAt);
+
+        if (fieldUpdates.newSafeToRead != null)
+            super.setSafeToRead(fieldUpdates.newSafeToRead);
+
+        if (fieldUpdates.newRangesForEpoch != null)
+            super.setRangesForEpoch(fieldUpdates.newRangesForEpoch);
+    }
+
+    /**
+     * Persistent field update logic
+     */
+
+    @Override
+    public final void upsertRedundantBefore(RedundantBefore addRedundantBefore)
+    {
+        // TODO (required): fix RedundantBefore sorting issue and switch to upsert mode
+        ensureFieldUpdates().newRedundantBefore = RedundantBefore.merge(redundantBefore(), addRedundantBefore);
+        unsafeUpsertRedundantBefore(addRedundantBefore);
+    }
+
+    @Override
+    public final void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
+    {
+        ensureFieldUpdates().newBootstrapBeganAt = newBootstrapBeganAt;
+    }
+
+    @Override
+    public final void setSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
+    {
+        ensureFieldUpdates().newSafeToRead = newSafeToRead;
+    }
+
+    @Override
+    public void setRangesForEpoch(RangesForEpoch rangesForEpoch)
+    {
+        if (rangesForEpoch != null)
+        {
+            super.setRangesForEpoch(rangesForEpoch);
+            ensureFieldUpdates().newRangesForEpoch = rangesForEpoch;
+        }
+    }
+
+    @Override
+    public RangesForEpoch ranges()
+    {
+        if (fieldUpdates != null && fieldUpdates.newRangesForEpoch != null)
+            return fieldUpdates.newRangesForEpoch;
+
+        return null;
+    }
+
+    @Override
+    public NavigableMap<TxnId, Ranges> bootstrapBeganAt()
+    {
+        if (fieldUpdates != null && fieldUpdates.newBootstrapBeganAt != null)
+            return fieldUpdates.newBootstrapBeganAt;
+
+        return super.bootstrapBeganAt();
+    }
+
+    @Override
+    public NavigableMap<Timestamp, Ranges> safeToReadAt()
+    {
+        if (fieldUpdates != null && fieldUpdates.newSafeToRead != null)
+            return fieldUpdates.newSafeToRead;
+
+        return super.safeToReadAt();
+    }
+
+    @Override
+    public RedundantBefore redundantBefore()
+    {
+        if (fieldUpdates != null && fieldUpdates.newRedundantBefore != null)
+            return fieldUpdates.newRedundantBefore;
+
+        return super.redundantBefore();
+    }
+
+    private FieldUpdates ensureFieldUpdates()
+    {
+        if (fieldUpdates == null) fieldUpdates = new FieldUpdates();
+        return fieldUpdates;
+    }
+
+    public FieldUpdates fieldUpdates()
+    {
+        return fieldUpdates;
     }
 }

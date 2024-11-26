@@ -65,22 +65,13 @@ import static accord.utils.Invariants.illegalState;
 public class InMemoryJournal implements Journal
 {
     private final Int2ObjectHashMap<NavigableMap<TxnId, List<Diff>>> diffsPerCommandStore = new Int2ObjectHashMap<>();
-    private final FieldStates fieldStates;
-
-    private static class FieldStates
-    {
-        RedundantBefore redundantBefore = RedundantBefore.EMPTY;
-        NavigableMap<TxnId, Ranges> bootstrapBeganAt = ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY);
-        NavigableMap<Timestamp, Ranges> safeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
-        CommandStores.RangesForEpoch.Snapshot rangesForEpoch = null;
-    }
+    private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
     private final Node.Id id;
 
     public InMemoryJournal(Node.Id id)
     {
         this.id = id;
-        this.fieldStates = new FieldStates();
     }
 
     @Override
@@ -120,37 +111,57 @@ public class InMemoryJournal implements Journal
     @Override
     public RedundantBefore loadRedundantBefore(int commandStoreId)
     {
-        return fieldStates.redundantBefore;
+        FieldUpdates fieldStates = this.fieldStates.get(commandStoreId);
+        if (fieldStates == null)
+            return null;
+        return fieldStates.newRedundantBefore;
     }
 
     @Override
     public NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId)
     {
-        return fieldStates.bootstrapBeganAt;
+        FieldUpdates fieldStates = this.fieldStates.get(commandStoreId);
+        if (fieldStates == null)
+            return null;
+        return fieldStates.newBootstrapBeganAt;
     }
 
     @Override
     public NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId)
     {
-        return fieldStates.safeToRead;
+        FieldUpdates fieldStates = this.fieldStates.get(commandStoreId);
+        if (fieldStates == null)
+            return null;
+        return fieldStates.newSafeToRead;
     }
 
     @Override
-    public CommandStores.RangesForEpoch.Snapshot loadRangesForEpoch(int commandStoreId)
+    public CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId)
     {
-        return fieldStates.rangesForEpoch;
+        FieldUpdates fieldStates = this.fieldStates.get(commandStoreId);
+        if (fieldStates == null)
+            return null;
+        return fieldStates.newRangesForEpoch;
     }
 
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
+
+        FieldUpdates fieldStates = this.fieldStates.computeIfAbsent(store, s -> {
+            FieldUpdates init = new FieldUpdates();
+            init.newRedundantBefore = RedundantBefore.EMPTY;
+            init.newBootstrapBeganAt = ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY);
+            init.newSafeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
+            return init;
+        });
         if (fieldUpdates.newRedundantBefore != null)
-            fieldStates.redundantBefore = fieldUpdates.newRedundantBefore;
+            fieldStates.newRedundantBefore = fieldUpdates.newRedundantBefore;
         if (fieldUpdates.newSafeToRead != null)
-            fieldStates.safeToRead = fieldUpdates.newSafeToRead;
+            fieldStates.newSafeToRead = fieldUpdates.newSafeToRead;
         if (fieldUpdates.newBootstrapBeganAt != null)
-            fieldStates.bootstrapBeganAt = fieldUpdates.newBootstrapBeganAt;
+            fieldStates.newBootstrapBeganAt = fieldUpdates.newBootstrapBeganAt;
         if (fieldUpdates.newRangesForEpoch != null)
-            fieldStates.rangesForEpoch = fieldUpdates.newRangesForEpoch;
+            fieldStates.newRangesForEpoch = fieldUpdates.newRangesForEpoch;
 
         if (onFlush!= null)
             onFlush.run();

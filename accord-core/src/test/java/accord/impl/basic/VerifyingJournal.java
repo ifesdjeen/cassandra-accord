@@ -47,8 +47,8 @@ public class VerifyingJournal implements Journal
 
     public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        Command sut = this.sut.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
         Command model = this.model.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
+        Command sut = this.sut.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
         Invariants.checkState(sut.equals(model));
         return sut;
     }
@@ -72,26 +72,39 @@ public class VerifyingJournal implements Journal
 
     public RedundantBefore loadRedundantBefore(int commandStoreId)
     {
-        return sut.loadRedundantBefore(commandStoreId);
+        RedundantBefore model = this.model.loadRedundantBefore(commandStoreId);
+        RedundantBefore sut = this.sut.loadRedundantBefore(commandStoreId);
+        Invariants.checkState(sut.equals(model), "%s should equal %s", sut, model);
+        return sut;
     }
 
     public NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId)
     {
-        return sut.loadBootstrapBeganAt(commandStoreId);
+        NavigableMap<TxnId, Ranges> model = this.sut.loadBootstrapBeganAt(commandStoreId);
+        NavigableMap<TxnId, Ranges> sut = this.sut.loadBootstrapBeganAt(commandStoreId);
+        Invariants.checkState(sut.equals(model), "%s should equal %s", sut, model);
+        return sut;
     }
 
     public NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId)
     {
-        return sut.loadSafeToRead(commandStoreId);
+        NavigableMap<Timestamp, Ranges> model = this.model.loadSafeToRead(commandStoreId);
+        NavigableMap<Timestamp, Ranges> sut = this.sut.loadSafeToRead(commandStoreId);
+        Invariants.checkState(sut.equals(model), "%s should equal %s", sut, model);
+        return sut;
     }
 
-    public CommandStores.RangesForEpoch.Snapshot loadRangesForEpoch(int commandStoreId)
+    public CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId)
     {
-        return sut.loadRangesForEpoch(commandStoreId);
+        CommandStores.RangesForEpoch model = this.sut.loadRangesForEpoch(commandStoreId);
+        CommandStores.RangesForEpoch sut = this.sut.loadRangesForEpoch(commandStoreId);
+        Invariants.checkState(sut.equals(model), "%s should equal %s", sut, model);
+        return sut;
     }
 
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
+        model.saveStoreState(store, fieldUpdates, onFlush);
         sut.saveStoreState(store, fieldUpdates, onFlush);
     }
 }

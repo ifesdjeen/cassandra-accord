@@ -779,13 +779,15 @@ public class Cluster
                     && beforeCommand.promised().equals(afterCommand.promised())
                     && beforeCommand.durability().equals(afterCommand.durability()));
             }
+
             if (before.size() > store.unsafeCommands().size())
             {
-                for (TxnId txnId : before.keySet())
+                for (Map.Entry<TxnId, Command> entry : before.entrySet())
                 {
+                    TxnId txnId = entry.getKey();
                     if (!store.unsafeCommands().containsKey(txnId))
                     {
-                        Command beforeCommand = before.get(txnId);
+                        Command beforeCommand = entry.getValue();
                         if (beforeCommand.saveStatus() == SaveStatus.Erased)
                             continue;
 
@@ -1123,7 +1125,7 @@ public class Cluster
         {
             return txnId + ":" + command.saveStatus() + "@"
                    + commandStore.toString().replaceAll("DelayedCommandStore", "")
-                   + (command.homeKey() != null && commandStore.unsafeRangesForEpoch().allAt(txnId.epoch()).contains(command.homeKey()) ? "(Home)" : "");
+                   + (command.homeKey() != null && commandStore.unsafeGetRangesForEpoch().allAt(txnId.epoch()).contains(command.homeKey()) ? "(Home)" : "");
         }
     }
 
@@ -1270,7 +1272,7 @@ public class Cluster
         if (participants == null)
             return false;
 
-        return participants.owns().intersects(commandStore.unsafeRangesForEpoch().allBetween(command.txnId().epoch(), command.executeAtIfKnownElseTxnId()));
+        return participants.owns().intersects(commandStore.unsafeGetRangesForEpoch().allBetween(command.txnId().epoch(), command.executeAtIfKnownElseTxnId()));
     }
 
     private BlockingTransaction toBlocking(Command command, DelayedCommandStore store)
