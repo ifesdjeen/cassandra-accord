@@ -262,13 +262,13 @@ public abstract class SafeCommandStore
         TxnId txnId = updated.txnId();
         if (newSaveStatus.known.isDefinitionKnown() && !oldSaveStatus.known.isDefinitionKnown())
         {
-            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            Ranges ranges = updated.route().slice(rangesForEpoch().all(), Minimal).toRanges();
             commandStore().markExclusiveSyncPoint(this, txnId, ranges);
         }
 
         if (newSaveStatus == Applied && oldSaveStatus != Applied)
         {
-            Ranges ranges = updated.route().slice(ranges().all(), Minimal).toRanges();
+            Ranges ranges = updated.route().slice(rangesForEpoch().all(), Minimal).toRanges();
             commandStore().markExclusiveSyncPointLocallyApplied(this, txnId, ranges);
         }
     }
@@ -441,7 +441,7 @@ public abstract class SafeCommandStore
     public abstract Agent agent();
     public abstract ProgressLog progressLog();
     public abstract NodeCommandStoreService node();
-    public abstract CommandStores.RangesForEpoch ranges();
+    public abstract CommandStores.RangesForEpoch rangesForEpoch();
 
     protected NavigableMap<TxnId, Ranges> bootstrapBeganAt()
     {
@@ -465,12 +465,12 @@ public abstract class SafeCommandStore
 
     public Ranges futureRanges(TxnId txnId)
     {
-        return ranges().allBefore(txnId.epoch());
+        return rangesForEpoch().allBefore(txnId.epoch());
     }
 
     public Ranges coordinateRanges(TxnId txnId)
     {
-        return ranges().allAt(txnId.epoch());
+        return rangesForEpoch().allAt(txnId.epoch());
     }
 
     public Ranges ranges(TxnId txnId, Timestamp executeAt)
@@ -480,7 +480,7 @@ public abstract class SafeCommandStore
 
     public Ranges ranges(TxnId txnId, long untilLocalEpoch)
     {
-        return ranges().allBetween(txnId.epoch(), untilLocalEpoch);
+        return rangesForEpoch().allBetween(txnId.epoch(), untilLocalEpoch);
     }
 
     public final Ranges safeToReadAt(Timestamp at)
@@ -490,7 +490,7 @@ public abstract class SafeCommandStore
 
     public @Nonnull Ranges unsafeToReadAt(Timestamp at)
     {
-        return ranges().allAt(at).without(safeToReadAt(at));
+        return rangesForEpoch().allAt(at).without(safeToReadAt(at));
     }
 
     // if we have to re-bootstrap (due to failed bootstrap or catching up on a range) then we may

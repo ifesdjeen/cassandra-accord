@@ -107,7 +107,7 @@ public class LoggingJournal implements Journal
         return delegate.loadSafeToRead(commandStoreId);
     }
 
-    public CommandStores.RangesForEpoch.Snapshot loadRangesForEpoch(int commandStoreId)
+    public CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId)
     {
         return delegate.loadRangesForEpoch(commandStoreId);
     }
