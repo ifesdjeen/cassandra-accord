@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
@@ -50,6 +51,7 @@ import java.util.zip.CRC32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
 import accord.burn.random.FrequentLargeRange;
@@ -301,7 +303,7 @@ public class BurnTestBase
         f2.get();
     }
 
-    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, Function<Id, Journal> journalFactory)
+    public static void burn(RandomSource random, TopologyFactory topologyFactory, List<Id> clients, List<Id> nodes, int keyCount, int prefixCount, int operations, int concurrency, PendingQueue pendingQueue, BiFunction<Id, Agent, Journal> journalFactory)
     {
         List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
         AtomicLong progress = new AtomicLong();

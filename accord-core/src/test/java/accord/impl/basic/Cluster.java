@@ -52,6 +52,7 @@ import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
 import accord.api.BarrierType;
 import accord.api.Journal;
 import accord.api.LocalConfig;
@@ -607,7 +608,7 @@ public class Cluster
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
                                               TopologyFactory topologyFactory, Supplier<Packet> in, Consumer<Runnable> noMoreWorkSignal,
-                                              Consumer<Map<Id, Node>> readySignal, Function<Node.Id, Journal> journalFactory)
+                                              Consumer<Map<Id, Node>> readySignal, BiFunction<Node.Id, Agent, Journal> journalFactory)
     {
         Topology topology = topologyFactory.toTopology(nodes);
         Map<Id, Node> nodeMap = new LinkedHashMap<>();
@@ -666,7 +667,7 @@ public class Cluster
                 BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
                 AgentExecutor nodeExecutor = nodeExecutorSupplier.apply(id, onStale);
                 executorMap.put(id, nodeExecutor);
-                Journal journal = journalFactory.apply(id);
+                Journal journal = journalFactory.apply(id, nodeExecutor.agent());
                 journalMap.put(id, journal);
                 BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);

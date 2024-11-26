@@ -20,31 +20,30 @@ package accord.impl.basic;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.Objects;
 import java.util.TreeMap;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableSortedMap;
 
+import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Result;
+import accord.impl.CommandChange;
+import accord.impl.ErasedSafeCommand;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.Commands;
-import accord.local.CommonAttributes;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
-import accord.primitives.Known;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Ranges;
@@ -54,10 +53,36 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
+import accord.utils.PersistentField;
 import org.agrona.collections.Int2ObjectHashMap;
 
-import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.primitives.SaveStatus.NotDefined;
+import static accord.api.Journal.Load.ALL;
+import static accord.impl.CommandChange.*;
+import static accord.impl.CommandChange.Fields.ACCEPTED;
+import static accord.impl.CommandChange.Fields.DURABILITY;
+import static accord.impl.CommandChange.Fields.EXECUTES_AT_LEAST;
+import static accord.impl.CommandChange.Fields.EXECUTE_AT;
+import static accord.impl.CommandChange.Fields.PARTIAL_DEPS;
+import static accord.impl.CommandChange.Fields.PARTIAL_TXN;
+import static accord.impl.CommandChange.Fields.PARTICIPANTS;
+import static accord.impl.CommandChange.Fields.PROMISED;
+import static accord.impl.CommandChange.Fields.RESULT;
+import static accord.impl.CommandChange.Fields.SAVE_STATUS;
+import static accord.impl.CommandChange.Fields.WAITING_ON;
+import static accord.impl.CommandChange.Fields.WRITES;
+import static accord.impl.CommandChange.anyFieldChanged;
+import static accord.impl.CommandChange.getFieldChanged;
+import static accord.impl.CommandChange.getFieldIsNull;
+import static accord.impl.CommandChange.getFlags;
+import static accord.impl.CommandChange.getWaitingOn;
+import static accord.impl.CommandChange.nextSetField;
+import static accord.impl.CommandChange.setFieldChanged;
+import static accord.impl.CommandChange.setFieldIsNull;
+import static accord.impl.CommandChange.toIterableSetFields;
+import static accord.impl.CommandChange.unsetFieldIsNull;
+import static accord.impl.CommandChange.unsetIterableFields;
+import static accord.impl.CommandChange.validateFlags;
+import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
@@ -69,15 +94,15 @@ public class InMemoryJournal implements Journal
     private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
     private final Node.Id id;
+    private final Agent agent;
 
-    public InMemoryJournal(Node.Id id)
+    public InMemoryJournal(Node.Id id, Agent agent)
     {
         this.id = id;
+        this.agent = agent;
     }
-
     @Override
     public Command loadCommand(int commandStoreId, TxnId txnId,
-                               // TODO: currently unused!
                                RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
@@ -89,17 +114,69 @@ public class InMemoryJournal implements Journal
         if (saved == null)
             return null;
 
-        return reconstruct(redundantBefore, saved);
+        Builder builder = reconstruct(saved, ALL);
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        switch (cleanup)
+        {
+            case EXPUNGE_PARTIAL:
+            case EXPUNGE:
+            case ERASE:
+                return ErasedSafeCommand.erased(txnId, ErasedOrVestigial);
+        }
+
+        return builder.construct();
+    }
+
+    @Override
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        Builder builder = reconstruct(commandStoreId, txnId, load);
+        if (builder == null || builder.isEmpty())
+            return null;
+
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        switch (cleanup)
+        {
+            case EXPUNGE_PARTIAL:
+            case EXPUNGE:
+            case ERASE:
+                return null;
+        }
+
+        Invariants.checkState(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
+        return builder.asMinimal();
+    }
+
+    private Builder reconstruct(int commandStoreId, TxnId txnId, Load load)
+    {
+        NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
+
+        if (commandStore == null)
+            return null;
+
+        return reconstruct(this.diffsPerCommandStore.get(commandStoreId).get(txnId), load);
+    }
+
+    private Builder reconstruct(List<Diff> saved, Load load)
+    {
+        if (saved == null)
+            return null;
+
+        Builder builder = null;
+        for (Diff diff : saved)
+        {
+            if (builder == null)
+                builder = new Builder(diff.txnId, load);
+            builder.apply(diff);
+        }
+        return builder;
     }
 
     @Override
     public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
         Diff diff;
-        if (update == null
-            || update.before == update.after
-            || update.after.saveStatus() == SaveStatus.Uninitialised
-            || (diff = diff(update.before, update.after)) == null)
+        if ((diff = toDiff(update)) == null)
         {
             if (onFlush!= null)
                 onFlush.run();
@@ -150,9 +227,15 @@ public class InMemoryJournal implements Journal
         return fieldStates.newRangesForEpoch;
     }
 
+    @Override
+    public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister()
+    {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    @Override
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
-
         FieldUpdates fieldStates = this.fieldStates.computeIfAbsent(store, s -> {
             FieldUpdates init = new FieldUpdates();
             init.newRedundantBefore = RedundantBefore.EMPTY;
@@ -160,6 +243,7 @@ public class InMemoryJournal implements Journal
             init.newSafeToRead = ImmutableSortedMap.of(Timestamp.NONE, Ranges.EMPTY);
             return init;
         });
+
         if (fieldUpdates.newRedundantBefore != null)
             fieldStates.newRedundantBefore = fieldUpdates.newRedundantBefore;
         if (fieldUpdates.newSafeToRead != null)
@@ -180,18 +264,20 @@ public class InMemoryJournal implements Journal
         {
             int commandStoreId = e.getKey();
             Map<TxnId, List<Diff>> localJournal = e.getValue();
-            CommandStore commandStore = commandStores.forId(commandStoreId);
-            if (commandStore == null)
+            CommandStore store = commandStores.forId(commandStoreId);
+            if (store == null)
                 continue;
 
             for (Map.Entry<TxnId, List<Diff>> e2 : localJournal.entrySet())
             {
                 List<Diff> diffs = e2.getValue();
                 if (diffs.isEmpty()) continue;
-                Command command =  reconstruct(commandStore.unsafeGetRedundantBefore(), diffs);
-                if (command.status() == Truncated || command.status() == Invalidated)
+                InMemoryJournal.Builder builder = reconstruct(diffs, ALL);
+                if (builder.saveStatus().status == Truncated || builder.saveStatus().status == Invalidated)
                     continue; // Already truncated
-                Cleanup cleanup = Cleanup.shouldCleanup(commandStore.agent(), command, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+
+                Command command = builder.construct();
+                Cleanup cleanup = Cleanup.shouldCleanup(store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
                 switch (cleanup)
                 {
                     case NO:
@@ -200,14 +286,14 @@ public class InMemoryJournal implements Journal
                     case TRUNCATE_WITH_OUTCOME:
                     case TRUNCATE:
                     case ERASE:
-                        command = Commands.purgeUnsafe(commandStore, command, cleanup);
+                        command = Commands.purge(command, command.participants(), cleanup);
                         Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
-                        Diff diff = diff(null, command);
+                        Diff diff = toDiff(new CommandUpdate(null, command));
                         e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
                         break;
 
                     case EXPUNGE:
-                        e2.setValue(new PurgedList(e2.getValue()));
+                        e2.setValue(new PurgedList());
                         break;
                 }
             }
@@ -225,6 +311,7 @@ public class InMemoryJournal implements Journal
         for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> diffEntry : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = diffEntry.getKey();
+
             // copy to avoid concurrent modification when appending to journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>(diffEntry.getValue());
 
@@ -237,7 +324,7 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
                 if (e.getValue().isEmpty()) continue;
-                Command command = reconstruct(commandStore.unsafeGetRedundantBefore(), e.getValue());
+                Command command = reconstruct(e.getValue(), ALL).construct();
                 Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
                 loader.load(command, sync);
@@ -247,13 +334,13 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    static class ErasedList extends AbstractList<Diff>
+    private static class ErasedList extends AbstractList<Diff>
     {
         final Diff erased;
 
         ErasedList(Diff erased)
         {
-            Invariants.checkArgument(erased.saveStatus.value == SaveStatus.Erased);
+            Invariants.checkArgument(erased.changes.get(SAVE_STATUS) == SaveStatus.Erased);
             this.erased = erased;
         }
 
@@ -274,7 +361,7 @@ public class InMemoryJournal implements Journal
         @Override
         public boolean add(Diff diff)
         {
-            if (diff.saveStatus != null && diff.saveStatus.value == SaveStatus.Erased)
+            if (diff.changes.get(SAVE_STATUS) == SaveStatus.Erased)
                 return false;
             throw illegalState();
         }
@@ -288,13 +375,9 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    static class PurgedList extends AbstractList<Diff>
+    private static class PurgedList extends AbstractList<Diff>
     {
-        final List<Diff> purged;
-        PurgedList(List<Diff> purged)
-        {
-            this.purged = purged;
-        }
+        PurgedList() {}
 
         @Override
         public Diff get(int index)
@@ -311,370 +394,223 @@ public class InMemoryJournal implements Journal
         @Override
         public boolean add(Diff diff)
         {
-            if (diff.saveStatus != null && diff.saveStatus.value == SaveStatus.Erased)
+            Object saveStatus = diff.changes.get(SAVE_STATUS);
+            if (saveStatus == SaveStatus.Erased)
                 return false;
             throw illegalState();
         }
     }
 
-    private Command reconstruct(RedundantBefore redundantBefore, List<Diff> diffs)
+    private static Diff toDiff(CommandUpdate update)
     {
-        Invariants.checkState(diffs != null && !diffs.isEmpty());
+        if (update == null
+            || update.before == update.after
+            || update.after == null
+            || update.after.saveStatus() == SaveStatus.Uninitialised)
+            return null;
 
-        TxnId txnId = null;
-        Timestamp executeAt = null;
-        Timestamp executesAtLeast = null;
-        SaveStatus saveStatus = NotDefined;
-        Status.Durability durability = Status.Durability.NotDurable;
+        int flags = validateFlags(getFlags(update.before, update.after));
+        if (!anyFieldChanged(flags))
+            return null;
 
-        Ballot acceptedOrCommitted = Ballot.ZERO;
-        Ballot promised = Ballot.ZERO;
-
-        StoreParticipants participants = null;
-        PartialTxn partialTxn = null;
-        PartialDeps partialDeps = null;
-
-        Command.WaitingOn waitingOn = null;
-        Writes writes = null;
-        Result result = null;
-
-        for (int i = 0; i < diffs.size(); i++)
-        {
-            Diff diff = diffs.get(i);
-            if (diff.txnId != null)
-                txnId = diff.txnId;
-            if (diff.executeAt != null)
-                executeAt = diff.executeAt.get();
-            if (diff.executesAtLeast != null)
-                executesAtLeast = diff.executesAtLeast.get();
-            if (diff.saveStatus != null)
-                saveStatus = diff.saveStatus.get();
-            if (diff.durability != null)
-                durability = diff.durability.get();
-
-            if (diff.acceptedOrCommitted != null)
-                acceptedOrCommitted = diff.acceptedOrCommitted.get();
-            if (diff.promised != null)
-                promised = diff.promised.get();
-
-            if (diff.participants != null)
-                participants = diff.participants.get();
-            if (diff.partialTxn != null)
-                partialTxn = diff.partialTxn.get();
-            if (diff.partialDeps != null)
-                partialDeps = diff.partialDeps.get();
-
-            if (diff.waitingOn != null)
-                waitingOn = diff.waitingOn.get();
-            if (diff.writes != null)
-                writes = diff.writes.get();
-            if (diff.result != null)
-                result = diff.result.get();
-
-            try
-            {
-                if (!txnId.kind().awaitsOnlyDeps())
-                    executesAtLeast = null;
-            }
-            catch (Throwable t)
-            {
-                t.printStackTrace();
-            }
-
-            switch (saveStatus.known.outcome)
-            {
-                case Erased:
-                case WasApply:
-                    writes = null;
-                    result = null;
-                    break;
-            }
-        }
-
-        CommonAttributes.Mutable attrs = new CommonAttributes.Mutable(txnId);
-        if (partialTxn != null)
-            attrs.partialTxn(partialTxn);
-        if (durability != null)
-            attrs.durability(durability);
-        if (participants != null) attrs.setParticipants(participants.filter(LOAD, redundantBefore, txnId, saveStatus.known.executeAt.isDecidedAndKnownToExecute() ? executeAt : null));
-        else attrs.setParticipants(StoreParticipants.empty(txnId));
-
-        // TODO (desired): we can simplify this logic if, instead of diffing, we will infer the diff from the status
-        if (partialDeps != null &&
-            (saveStatus.known.deps != Known.KnownDeps.NoDeps &&
-             saveStatus.known.deps != Known.KnownDeps.DepsErased &&
-             saveStatus.known.deps != Known.KnownDeps.DepsUnknown))
-            attrs.partialDeps(partialDeps);
-
-        try
-        {
-
-            Command current;
-            switch (saveStatus.status)
-            {
-                case NotDefined:
-                    current = saveStatus == SaveStatus.Uninitialised ? Command.NotDefined.uninitialised(attrs.txnId())
-                                                                     : Command.NotDefined.notDefined(attrs, promised);
-                    break;
-                case PreAccepted:
-                    current = Command.PreAccepted.preAccepted(attrs, executeAt, promised);
-                    break;
-                case AcceptedInvalidate:
-                case Accepted:
-                case PreCommitted:
-                    if (saveStatus == SaveStatus.AcceptedInvalidate)
-                        current = Command.AcceptedInvalidateWithoutDefinition.acceptedInvalidate(attrs, promised, acceptedOrCommitted);
-                    else
-                        current = Command.Accepted.accepted(attrs, saveStatus, executeAt, promised, acceptedOrCommitted);
-                    break;
-                case Committed:
-                case Stable:
-                    current = Command.Committed.committed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn);
-                    break;
-                case PreApplied:
-                case Applied:
-                    current = Command.Executed.executed(attrs, saveStatus, executeAt, promised, acceptedOrCommitted, waitingOn, writes, result);
-                    break;
-                case Invalidated:
-                case Truncated:
-                    current = truncated(attrs, saveStatus, executeAt, executesAtLeast, writes, result);
-                    break;
-                default:
-                    throw new IllegalStateException("Do not know " + saveStatus.status + " " + saveStatus);
-            }
-
-            return current;
-        }
-        catch (Throwable t)
-        {
-            throw new RuntimeException("Can not reconstruct from diff:\n" + diffs.stream().map(o -> o.toString())
-                                                                                 .collect(Collectors.joining("\n")),
-                                       t);
-        }
-    }
-
-    private static Command.Truncated truncated(CommonAttributes.Mutable attrs, SaveStatus status, Timestamp executeAt, Timestamp executesAtLeast, Writes writes, Result result)
-    {
-        switch (status)
-        {
-            default:
-                throw illegalState("Unhandled SaveStatus: " + status);
-            case TruncatedApplyWithOutcome:
-            case TruncatedApplyWithDeps:
-            case TruncatedApply:
-                return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
-            case ErasedOrVestigial:
-                return Command.Truncated.erasedOrVestigial(attrs.txnId(), attrs.participants());
-            case Erased:
-                // TODO (expected): why are we saving Durability here for erased commands?
-                return Command.Truncated.erased(attrs.txnId(), attrs.durability(), attrs.participants());
-            case Invalidated:
-                return Command.Truncated.invalidated(attrs.txnId());
-        }
+        return new Diff(flags, update);
     }
 
     private static class Diff
     {
         public final TxnId txnId;
+        public final Map<Fields, Object> changes;
+        public final int flags;
 
-        public final NewValue<Timestamp> executeAt;
-        public final NewValue<Timestamp> executesAtLeast;
-        public final NewValue<SaveStatus> saveStatus;
-        public final NewValue<Status.Durability> durability;
-
-        public final NewValue<Ballot> acceptedOrCommitted;
-        public final NewValue<Ballot> promised;
-
-        public final NewValue<StoreParticipants> participants;
-        public final NewValue<PartialTxn> partialTxn;
-        public final NewValue<PartialDeps> partialDeps;
-
-        public final NewValue<Writes> writes;
-        public final NewValue<Command.WaitingOn> waitingOn;
-
-        public final NewValue<Result> result; // temporarily here for sakes for reloads
-
-        public Diff(TxnId txnId,
-                    NewValue<Timestamp> executeAt,
-                    NewValue<Timestamp> executesAtLeast,
-                    NewValue<SaveStatus> saveStatus,
-                    NewValue<Status.Durability> durability,
-
-                    NewValue<Ballot> acceptedOrCommitted,
-                    NewValue<Ballot> promised,
-
-                    NewValue<StoreParticipants> participants,
-                    NewValue<PartialTxn> partialTxn,
-                    NewValue<PartialDeps> partialDeps,
-                    NewValue<Command.WaitingOn> waitingOn,
-
-                    NewValue<Writes> writes,
-                    NewValue<Result> result)
+        private Diff(int flags, CommandUpdate update)
         {
-            this.txnId = txnId;
-            this.executeAt = executeAt;
-            this.executesAtLeast = executesAtLeast;
-            this.saveStatus = saveStatus;
-            this.durability = durability;
+            this.flags = flags;
+            this.txnId = update.txnId;
+            this.changes = new EnumMap<>(Fields.class);
 
-            this.acceptedOrCommitted = acceptedOrCommitted;
-            this.promised = promised;
+            Command after = update.after;
+            int iterable = toIterableSetFields(flags);
+            while (iterable != 0)
+            {
+                Fields field = nextSetField(iterable);
+                if (!getFieldChanged(field, flags) || getFieldIsNull(field, flags))
+                {
+                    iterable = unsetIterableFields(field, iterable);
+                    continue;
+                }
 
-            this.participants = participants;
-            this.partialTxn = partialTxn;
-            this.partialDeps = partialDeps;
+                switch (field)
+                {
+                    case EXECUTE_AT:
+                        changes.put(EXECUTE_AT, after.executeAt());
+                        break;
+                    case EXECUTES_AT_LEAST:
+                        changes.put(EXECUTES_AT_LEAST, after.executesAtLeast());
+                        break;
+                    case SAVE_STATUS:
+                        changes.put(SAVE_STATUS, after.saveStatus());
+                        break;
+                    case DURABILITY:
+                        changes.put(DURABILITY, after.durability());
+                        break;
+                    case ACCEPTED:
+                        changes.put(ACCEPTED, after.acceptedOrCommitted());
+                        break;
+                    case PROMISED:
+                        changes.put(PROMISED, after.promised());
+                        break;
+                    case PARTICIPANTS:
+                        changes.put(PARTICIPANTS, after.participants());
+                        break;
+                    case PARTIAL_TXN:
+                        changes.put(PARTIAL_TXN, after.partialTxn());
+                        break;
+                    case PARTIAL_DEPS:
+                        changes.put(PARTIAL_DEPS, after.partialDeps());
+                        break;
+                    case WAITING_ON:
+                        Command.WaitingOn waitingOn = getWaitingOn(after);
+                        changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps) -> waitingOn);
+                        break;
+                    case WRITES:
+                        changes.put(WRITES, after.writes());
+                        break;
+                    case RESULT:
+                        changes.put(RESULT, after.result());
+                        break;
+                    case CLEANUP:
+                }
 
-            this.writes = writes;
-            this.waitingOn = waitingOn;
-            this.result = result;
-        }
-
-        public boolean allNulls()
-        {
-            if (txnId != null) return false;
-            if (executeAt != null) return false;
-            if (executesAtLeast != null) return false;
-            if (saveStatus != null) return false;
-            if (durability != null) return false;
-            if (acceptedOrCommitted != null) return false;
-            if (promised != null) return false;
-            if (participants != null) return false;
-            if (partialTxn != null) return false;
-            if (partialDeps != null) return false;
-            if (writes != null) return false;
-            if (waitingOn != null) return false;
-            if (result != null) return false;
-            return true;
-        }
-
-        @Override
-        public String toString()
-        {
-            StringBuilder builder = new StringBuilder("Diff{");
-            if (txnId != null)
-                builder.append("txnId = ").append(txnId).append(" ");
-            if (executeAt != null)
-                builder.append("executeAt = ").append(executeAt).append(" ");
-            if (executesAtLeast != null)
-                builder.append("executesAtLeast = ").append(executesAtLeast).append(" ");
-            if (saveStatus != null)
-                builder.append("saveStatus = ").append(saveStatus).append(" ");
-            if (durability != null)
-                builder.append("durability = ").append(durability).append(" ");
-            if (acceptedOrCommitted != null)
-                builder.append("acceptedOrCommitted = ").append(acceptedOrCommitted).append(" ");
-            if (promised != null)
-                builder.append("promised = ").append(promised).append(" ");
-            if (participants != null)
-                builder.append("participants = ").append(participants).append(" ");
-            if (partialTxn != null)
-                builder.append("partialTxn = ").append(partialTxn).append(" ");
-            if (partialDeps != null)
-                builder.append("partialDeps = ").append(partialDeps).append(" ");
-            if (writes != null)
-                builder.append("writes = ").append(writes).append(" ");
-            if (waitingOn != null)
-                builder.append("waitingOn = ").append(waitingOn).append(" ");
-            if (result != null)
-                builder.append("result = ").append(result).append(" ");
-            builder.append("}");
-            return builder.toString();
+                iterable = unsetIterableFields(field, iterable);
+            }
         }
     }
 
-    static Diff diff(Command before, Command after)
+    private static class Builder extends CommandChange.Builder
     {
-        if (Objects.equals(before, after))
-            return null;
-
-        Diff diff = new Diff(after.txnId(),
-                             ifNotEqual(before, after, Command::executeAt, true),
-                             ifNotEqual(before, after, Command::executesAtLeast, true),
-                             ifNotEqual(before, after, Command::saveStatus, false),
-
-                             ifNotEqual(before, after, Command::durability, false),
-                             ifNotEqual(before, after, Command::acceptedOrCommitted, false),
-                             ifNotEqual(before, after, Command::promised, false),
-
-                             ifNotEqual(before, after, Command::participants, true),
-                             ifNotEqual(before, after, Command::partialTxn, false),
-                             ifNotEqual(before, after, Command::partialDeps, false),
-                             ifNotEqual(before, after, InMemoryJournal::getWaitingOn, true),
-                             ifNotEqual(before, after, Command::writes, false),
-                             ifNotEqual(before, after, Command::result, false));
-        if (diff.allNulls())
-            return null;
-
-        return diff;
-    }
-
-    static Command.WaitingOn getWaitingOn(Command command)
-    {
-        if (command instanceof Command.Committed)
-            return command.asCommitted().waitingOn();
-
-        return null;
-    }
-
-    private static <OBJ, VAL> NewValue<VAL> ifNotEqual(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch)
-    {
-        VAL l = null;
-        VAL r = null;
-        if (lo != null) l = convert.apply(lo);
-        if (ro != null) r = convert.apply(ro);
-
-        if (l == r)
-            return null; // null here means there was no change
-
-        if (l == null || r == null)
-            return NewValue.of(r);
-
-        assert allowClassMismatch || l.getClass() == r.getClass() : String.format("%s != %s", l.getClass(), r.getClass());
-
-        if (l.equals(r))
-            return null;
-
-        // TODO (expected): do we need to wrap this in a value object if we also have flags?
-        return NewValue.of(r);
-    }
-
-    private static class NewValue<T>
-    {
-        final T value;
-
-        private NewValue(T value)
+        private Builder(TxnId txnId, Load load)
         {
-            this.value = value;
+            super(txnId, load);
         }
 
-        public T get()
+        private void apply(Diff diff)
         {
-            return value;
+            Invariants.checkState(diff.txnId != null);
+            Invariants.checkState(diff.flags != 0);
+            nextCalled = true;
+            count++;
+
+            int iterable = toIterableSetFields(diff.flags);
+            while (iterable != 0)
+            {
+                Fields field = nextSetField(iterable);
+                if (getFieldChanged(field, diff.flags))
+                {
+                    this.flags = setFieldChanged(field, this.flags);
+                    if (getFieldIsNull(field, diff.flags))
+                    {
+                        this.flags = setFieldIsNull(field, this.flags);
+                        setNull(field);
+                    }
+                    else
+                    {
+                        this.flags = unsetFieldIsNull(field, this.flags);
+                        deserialize(diff, field);
+                    }
+                }
+
+                iterable = unsetIterableFields(field, iterable);
+            }
         }
 
-        public static <T> NewValue<T> of(T value)
+        private void setNull(Fields field)
         {
-            return new NewValue<>(value);
+            switch (field)
+            {
+                case EXECUTE_AT:
+                    executeAt = null;
+                    break;
+                case EXECUTES_AT_LEAST:
+                    executeAtLeast = null;
+                    break;
+                case SAVE_STATUS:
+                    saveStatus = null;
+                    break;
+                case DURABILITY:
+                    durability = null;
+                    break;
+                case ACCEPTED:
+                    acceptedOrCommitted = null;
+                    break;
+                case PROMISED:
+                    promised = null;
+                    break;
+                case PARTICIPANTS:
+                    participants = null;
+                    break;
+                case PARTIAL_TXN:
+                    partialTxn = null;
+                    break;
+                case PARTIAL_DEPS:
+                    partialDeps = null;
+                    break;
+                case WAITING_ON:
+                    waitingOn = null;
+                    break;
+                case WRITES:
+                    writes = null;
+                    break;
+                case RESULT:
+                    result = null;
+                    break;
+                case CLEANUP:
+                    throw new IllegalStateException();
+            }
         }
 
-        public String toString()
+        private void deserialize(Diff diff, Fields field)
         {
-            return "" + value;
-        }
-
-        @Override
-        public boolean equals(Object o)
-        {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            NewValue<?> newValue = (NewValue<?>) o;
-            return Objects.equals(value, newValue.value);
-        }
-
-        @Override
-        public int hashCode()
-        {
-            throw new UnsupportedOperationException();
+            switch (field)
+            {
+                case EXECUTE_AT:
+                    executeAt = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTE_AT));
+                    break;
+                case EXECUTES_AT_LEAST:
+                    executeAtLeast = Invariants.nonNull((Timestamp) diff.changes.get(EXECUTES_AT_LEAST));
+                    break;
+                case SAVE_STATUS:
+                    saveStatus = Invariants.nonNull((SaveStatus) diff.changes.get(SAVE_STATUS));
+                    break;
+                case DURABILITY:
+                    durability = Invariants.nonNull((Status.Durability) diff.changes.get(DURABILITY));
+                    break;
+                case ACCEPTED:
+                    acceptedOrCommitted = Invariants.nonNull((Ballot) diff.changes.get(ACCEPTED));
+                    break;
+                case PROMISED:
+                    promised = Invariants.nonNull((Ballot) diff.changes.get(PROMISED));
+                    break;
+                case PARTICIPANTS:
+                    participants = Invariants.nonNull((StoreParticipants) diff.changes.get(PARTICIPANTS));
+                    break;
+                case PARTIAL_TXN:
+                    partialTxn = Invariants.nonNull((PartialTxn) diff.changes.get(PARTIAL_TXN));
+                    break;
+                case PARTIAL_DEPS:
+                    partialDeps = Invariants.nonNull((PartialDeps) diff.changes.get(PARTIAL_DEPS));
+                    break;
+                case WAITING_ON:
+                    waitingOn = Invariants.nonNull((WaitingOnProvider) diff.changes.get(WAITING_ON));
+                    break;
+                case WRITES:
+                    writes = Invariants.nonNull((Writes) diff.changes.get(WRITES));
+                    break;
+                case RESULT:
+                    result = Invariants.nonNull((Result) diff.changes.get(RESULT));
+                    break;
+                case CLEANUP:
+                    throw new IllegalStateException();
+            }
         }
     }
 }
