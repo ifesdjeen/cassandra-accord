@@ -732,7 +732,13 @@ public class Cluster
             NavigableMap<TxnId, Command> commands = new TreeMap<>();
             result.put(store.id(), commands);
             for (Map.Entry<TxnId, GlobalCommand> e : store.unsafeCommands().entrySet())
-                commands.put(e.getKey(), e.getValue().value());
+            {
+                Command command = e.getValue().value();
+                Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
+                                      "Found uninitialized command in the log: %s", command);
+                commands.put(e.getKey(), command);
+            }
+
         }
         return result;
     }
@@ -790,7 +796,7 @@ public class Cluster
                         if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::locallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
-                        Invariants.checkState(false);
+                        Invariants.checkState(false, "Found a command in an unexpected state: %s", beforeCommand);
                     }
                 }
             }
