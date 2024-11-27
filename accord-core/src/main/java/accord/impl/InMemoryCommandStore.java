@@ -1038,22 +1038,22 @@ public abstract class InMemoryCommandStore extends CommandStore
         public void postExecute()
         {
             commands.values().forEach(c -> {
-                if (c != null && c.current() != null)
-                {
-                    Timestamp executeAt = c.current().executeAtIfKnown();
-                    if (executeAt == null)
-                        return;
+                if (c == null || c.current() == null)
+                    return;
 
+                Timestamp executeAt = c.current().executeAtIfKnown();
+                if (executeAt != null)
+                {
                     if (c.current().hasBeen(Truncated)) commandStore.commandsByExecuteAt.remove(executeAt);
                     else commandStore.commandsByExecuteAt.put(executeAt, commandStore.command(c.txnId()));
                 }
-            });
 
-            commands.values().forEach(c -> {
-                if (c.isUnset())
+                if (c.isUnset() || c.current().saveStatus().isUninitialised())
                     commandStore.commands.remove(c.txnId());
+
                 c.invalidate();
             });
+
             timestampsForKey.values().forEach(tfk -> {
                 if (tfk.isUnset())
                     commandStore.timestampsForKey.remove(tfk.key());

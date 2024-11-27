@@ -126,6 +126,8 @@ public class Journal
         {
             if (e.getValue().isEmpty()) continue;
             Command command = reconstruct(commandStoreId, e.getKey(), e.getValue());
+            Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
+                                  "Found uninitialized command in the log: %s", command);
             if (command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
                 toApply.add(command);
             loader.load(command);
@@ -392,7 +394,9 @@ public class Journal
 
     public void onExecute(int commandStoreId, Command before, Command after, boolean isPrimary)
     {
-        if (before == null && after == null)
+        if (before == after
+            || after == null
+            || after.saveStatus() == SaveStatus.Uninitialised)
             return;
 
         Diff diff = diff(before, after);
