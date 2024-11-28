@@ -1050,8 +1050,14 @@ public class Gens {
             if (!bestEffort)
             {
                 T value;
-                while (!seen.add((value = fn.next(random)))) {}
-                return value;
+                // 10k attempts
+                for (int i = 0; i < 10_000; i++)
+                {
+                    if (seen.add((value = fn.next(random))))
+                        return value;
+                }
+
+                throw new IllegalArgumentException("Could not generate a unique value after 10k attempts");
             }
             else
             {
