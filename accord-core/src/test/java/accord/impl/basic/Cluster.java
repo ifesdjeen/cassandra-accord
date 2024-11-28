@@ -786,7 +786,7 @@ public class Cluster
                     if (!store.unsafeCommands().containsKey(txnId))
                     {
                         Command beforeCommand = before.get(txnId);
-                        if (beforeCommand.saveStatus() == SaveStatus.Erased || beforeCommand.saveStatus() == SaveStatus.Uninitialised)
+                        if (beforeCommand.saveStatus() == SaveStatus.Erased)
                             continue;
 
                         if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Entry::shardRedundantBefore).compareTo(txnId) > 0)
