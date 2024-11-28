@@ -237,17 +237,18 @@ class SortedArraysTest
     @Test
     public void testLinearSubtract()
     {
-        int[][] quants = {{0, 1000, 0, 1000},
-                          {0, 100, 0, 1000},
-                          {0, 100, 0, 10},
-                          {0, 10, 0, 10},
-                          {0, 5, 0, 5},
-                          {0, 5, 0, 5}};
+        int[][] quants = {{1000, 1000},
+                          {100, 1000},
+                          {100, 10},
+                          {10, 10},
+                          {5, 5},
+                          {5, 5}};
 
         for (int[] quant : quants)
         {
-            Gen<Integer[]> gen1 = sortedUniqueIntegerArray(quant[1], quant[0]);
-            Gen<Integer[]> gen2 = sortedUniqueIntegerArray(quant[3], quant[2]);
+            System.out.println(Arrays.toString(quant));
+            Gen<Integer[]> gen1 = sortedUniqueIntegerArray(quant[0] * 2, 0, quant[0]);
+            Gen<Integer[]> gen2 = sortedUniqueIntegerArray(quant[1] * 2, 0, quant[1]);
             qt().forAll(gen1, gen2).withExamples(1000).check((a, b) -> {
                 Set<Integer> left = new HashSet<>(Arrays.asList(a));
                 Set<Integer> right = new HashSet<>(Arrays.asList(b));
@@ -366,18 +367,25 @@ class SortedArraysTest
     }
 
     private static Gen<Integer[]> sortedUniqueIntegerArray(int range, int minSize) {
+        return sortedUniqueIntegerArray(range, minSize, 100);
+    }
+
+    private static Gen<Integer[]> sortedUniqueIntegerArray(int range, int minSize, int maxSize) {
         return Gens.arrays(Integer.class, Gens.ints().between(0, range))
-                .unique()
-                .ofSizeBetween(minSize, 100)
-                .map(a -> {
-                    Arrays.sort(a);
-                    return a;
-                });
+                   .unique()
+                   .ofSizeBetween(minSize, maxSize)
+                   .map(a -> {
+                       Arrays.sort(a);
+                       return a;
+                   });
     }
 
     private static Gen<Integer[]> sortedIntegerArray(int range, int minSize) {
+        return sortedUniqueIntegerArray(range, minSize, 100);
+    }
+    private static Gen<Integer[]> sortedIntegerArray(int range, int minSize, int maxSize) {
         return Gens.arrays(Integer.class, Gens.ints().between(0, range))
-                .ofSizeBetween(minSize, 100)
+                .ofSizeBetween(minSize, maxSize)
                 .map(a -> {
                     Arrays.sort(a);
                     return a;
