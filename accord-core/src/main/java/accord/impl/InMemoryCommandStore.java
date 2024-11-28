@@ -1415,12 +1415,13 @@ public abstract class InMemoryCommandStore extends CommandStore
                 commandStore.executeInContext(commandStore,
                                               context(command, ASYNC),
                                               safeStore -> loadInternal(command, safeStore));
-                onDone.success();
             }
             catch (Throwable t)
             {
                 onDone.failure(t);
             }
+
+            onDone.success();
         }
 
         @Override

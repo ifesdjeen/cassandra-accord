@@ -18,12 +18,14 @@
 
 package accord;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import com.google.common.collect.Sets;
@@ -66,6 +68,8 @@ import accord.utils.EpochFunction;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.ThreadPoolScheduler;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ThrowingRunnable;
 
 import static accord.utils.async.AsyncChains.awaitUninterruptibly;
 
@@ -203,5 +207,20 @@ public class Utils
     public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
     {
         return new TopologyManager(sorter, new TestAgent.RethrowAgent(), node, Scheduler.NEVER_RUN_SCHEDULED, new MockCluster.Clock(0), LocalConfig.DEFAULT);
+    }
+
+    public static void spinUntilSuccess(ThrowingRunnable runnable)
+    {
+        spinUntilSuccess(runnable, 10);
+    }
+
+    public static void spinUntilSuccess(ThrowingRunnable runnable, int timeoutInSeconds)
+    {
+        Awaitility.await()
+                  .pollInterval(Duration.ofMillis(100))
+                  .pollDelay(0, TimeUnit.MILLISECONDS)
+                  .atMost(timeoutInSeconds, TimeUnit.SECONDS)
+                  .ignoreExceptions()
+                  .untilAsserted(runnable);
     }
 }
