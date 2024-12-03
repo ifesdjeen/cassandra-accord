@@ -22,7 +22,6 @@ import java.util.NavigableMap;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.impl.CommandChange;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
