@@ -75,6 +75,11 @@ public class LoggingJournal implements Journal
         return delegate.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
     }
 
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        return delegate.loadMinimal(commandStoreId, txnId, load, redundantBefore, durableBefore);
+    }
+
     public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
         log("%d: %s\n", store, update.after);

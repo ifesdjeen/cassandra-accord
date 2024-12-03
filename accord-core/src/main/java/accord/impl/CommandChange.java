@@ -23,6 +23,7 @@ import java.util.function.Function;
 import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Agent;
+import accord.api.Journal;
 import accord.api.Result;
 import accord.local.Cleanup;
 import accord.local.Command;
@@ -40,8 +41,9 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 
+import static accord.api.Journal.*;
+import static accord.api.Journal.Load.ALL;
 import static accord.impl.CommandChange.Fields.*;
-import static accord.impl.CommandChange.Load.*;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
 import static accord.primitives.Known.KnownDeps.DepsErased;
@@ -193,48 +195,6 @@ public class CommandChange
         return oldFlags | (1 << field.ordinal());
     }
 
-    public enum Load
-    {
-        ALL(0),
-        PURGEABLE(SAVE_STATUS, PARTICIPANTS, DURABILITY, EXECUTE_AT, WRITES),
-        MINIMAL(SAVE_STATUS, PARTICIPANTS, EXECUTE_AT);
-
-        final int mask;
-
-        Load(int mask)
-        {
-            this.mask = mask;
-        }
-
-        Load(Fields ... fields)
-        {
-            int mask = -1;
-            for (Fields field : fields)
-                mask &= ~(1<< field.ordinal());
-            this.mask = mask;
-        }
-    }
-
-    public static class MinimalCommand
-    {
-        public final TxnId txnId;
-        public final SaveStatus saveStatus;
-        public final StoreParticipants participants;
-        public final Status.Durability durability;
-        public final Timestamp executeAt;
-        public final Writes writes;
-
-        public MinimalCommand(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Status.Durability durability, Timestamp executeAt, Writes writes)
-        {
-            this.txnId = txnId;
-            this.saveStatus = saveStatus;
-            this.participants = participants;
-            this.durability = durability;
-            this.executeAt = executeAt;
-            this.writes = writes;
-        }
-    }
-
     public static class Builder
     {
         protected final int mask;
@@ -265,7 +225,7 @@ public class CommandChange
 
         public Builder(TxnId txnId, Load load)
         {
-            this.mask = load.mask;
+            this.mask = mask(load);
             init(txnId);
         }
 
@@ -276,7 +236,7 @@ public class CommandChange
 
         public Builder(Load load)
         {
-            this.mask = load.mask;
+            this.mask = mask(load);
         }
 
         public Builder()
@@ -294,6 +254,7 @@ public class CommandChange
             return executeAt;
         }
 
+        // TODO: why unused?
         public Timestamp executeAtLeast()
         {
             return executeAtLeast;
@@ -499,9 +460,9 @@ public class CommandChange
             return builder;
         }
 
-        public MinimalCommand asMinimal()
+        public Command.Minimal asMinimal()
         {
-            return new MinimalCommand(txnId, saveStatus, participants, durability, executeAt, writes);
+            return new Command.Minimal(txnId, saveStatus, participants, durability, executeAt, writes);
         }
 
         public void forceResult(Result newValue)
@@ -613,5 +574,22 @@ public class CommandChange
     public interface WaitingOnProvider
     {
         Command.WaitingOn provide(TxnId txnId, PartialDeps deps);
+    }
+
+    private static int mask(Fields... fields)
+    {
+        int mask = -1;
+        for (Fields field : fields)
+            mask &= ~(1 << field.ordinal());
+        return mask;
+    }
+
+    private static final int[] LOAD_MASKS = new int[] {0,
+                                                       mask(SAVE_STATUS, PARTICIPANTS, DURABILITY, EXECUTE_AT, WRITES),
+                                                       mask(SAVE_STATUS, PARTICIPANTS, EXECUTE_AT)};
+
+    public static int mask(Load load)
+    {
+        return LOAD_MASKS[load.ordinal()];
     }
 }

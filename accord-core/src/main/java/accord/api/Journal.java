@@ -22,6 +22,7 @@ import java.util.NavigableMap;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.impl.CommandChange;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
@@ -36,6 +37,8 @@ import accord.primitives.TxnId;
 public interface Journal
 {
     Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
+
     // TODO (required): use OnDone instead of Runnable
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
@@ -80,6 +83,13 @@ public interface Journal
                    ", newRangesForEpoch=" + newRangesForEpoch +
                    '}';
         }
+    }
+
+    enum Load
+    {
+        ALL,
+        PURGEABLE,
+        MINIMAL
     }
 
     /**

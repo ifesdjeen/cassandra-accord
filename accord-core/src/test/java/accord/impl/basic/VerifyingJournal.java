@@ -45,6 +45,7 @@ public class VerifyingJournal implements Journal
         this.sut = sut;
     }
 
+    @Override
     public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         Command model = this.model.loadCommand(commandStoreId, txnId, redundantBefore, durableBefore);
@@ -53,23 +54,36 @@ public class VerifyingJournal implements Journal
         return sut;
     }
 
+    @Override
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    {
+        Command.Minimal model = this.model.loadMinimal(commandStoreId, txnId, load, redundantBefore, durableBefore);
+        Command.Minimal sut = this.sut.loadMinimal(commandStoreId, txnId, load, redundantBefore, durableBefore);
+        Invariants.checkState(sut.equals(model));
+        return sut;
+    }
+
+    @Override
     public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
         model.saveCommand(store, update, null);
         sut.saveCommand(store, update, onFlush);
     }
 
+    @Override
     public void purge(CommandStores commandStores)
     {
         model.purge(commandStores);
         sut.purge(commandStores);
     }
 
+    @Override
     public void replay(CommandStores commandStores)
     {
         sut.replay(commandStores);
     }
 
+    @Override
     public RedundantBefore loadRedundantBefore(int commandStoreId)
     {
         RedundantBefore model = this.model.loadRedundantBefore(commandStoreId);
@@ -78,6 +92,7 @@ public class VerifyingJournal implements Journal
         return sut;
     }
 
+    @Override
     public NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId)
     {
         NavigableMap<TxnId, Ranges> model = this.sut.loadBootstrapBeganAt(commandStoreId);
@@ -86,6 +101,7 @@ public class VerifyingJournal implements Journal
         return sut;
     }
 
+    @Override
     public NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId)
     {
         NavigableMap<Timestamp, Ranges> model = this.model.loadSafeToRead(commandStoreId);
@@ -94,6 +110,7 @@ public class VerifyingJournal implements Journal
         return sut;
     }
 
+    @Override
     public CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId)
     {
         CommandStores.RangesForEpoch model = this.sut.loadRangesForEpoch(commandStoreId);
@@ -102,6 +119,7 @@ public class VerifyingJournal implements Journal
         return sut;
     }
 
+    @Override
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
         model.saveStoreState(store, fieldUpdates, onFlush);

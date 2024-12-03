@@ -1155,6 +1155,41 @@ public abstract class Command implements CommonAttributes
         }
     }
 
+    public static class Minimal
+    {
+        public final TxnId txnId;
+        public final SaveStatus saveStatus;
+        public final StoreParticipants participants;
+        public final Status.Durability durability;
+        public final Timestamp executeAt;
+        public final Writes writes;
+
+        public Minimal(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Status.Durability durability, Timestamp executeAt, Writes writes)
+        {
+            this.txnId = txnId;
+            this.saveStatus = saveStatus;
+            this.participants = participants;
+            this.durability = durability;
+            this.executeAt = executeAt;
+            this.writes = writes;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            Minimal minimal = (Minimal) object;
+            return Objects.equals(txnId, minimal.txnId) && saveStatus == minimal.saveStatus && Objects.equals(participants, minimal.participants) && durability == minimal.durability && Objects.equals(executeAt, minimal.executeAt) && Objects.equals(writes, minimal.writes);
+        }
+
+        @Override
+        public final int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
+    }
+
     public static class WaitingOn
     {
         private static final WaitingOn EMPTY_FOR_KEY = new WaitingOn(RoutingKeys.EMPTY, RangeDeps.NONE, KeyDeps.NONE, ImmutableBitSet.EMPTY, null);

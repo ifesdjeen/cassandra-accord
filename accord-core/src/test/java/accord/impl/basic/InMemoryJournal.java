@@ -28,9 +28,11 @@ import java.util.TreeMap;
 
 import com.google.common.collect.ImmutableSortedMap;
 
+import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Result;
 import accord.impl.CommandChange;
+import accord.impl.ErasedSafeCommand;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
 import accord.local.Command;
@@ -53,6 +55,7 @@ import accord.primitives.Writes;
 import accord.utils.Invariants;
 import org.agrona.collections.Int2ObjectHashMap;
 
+import static accord.api.Journal.Load.ALL;
 import static accord.impl.CommandChange.Fields.ACCEPTED;
 import static accord.impl.CommandChange.Fields.DURABILITY;
 import static accord.impl.CommandChange.Fields.EXECUTES_AT_LEAST;
@@ -65,7 +68,6 @@ import static accord.impl.CommandChange.Fields.RESULT;
 import static accord.impl.CommandChange.Fields.SAVE_STATUS;
 import static accord.impl.CommandChange.Fields.WAITING_ON;
 import static accord.impl.CommandChange.Fields.WRITES;
-import static accord.impl.CommandChange.Load.ALL;
 import static accord.impl.CommandChange.anyFieldChanged;
 import static accord.impl.CommandChange.getFieldChanged;
 import static accord.impl.CommandChange.getFieldIsNull;
@@ -78,10 +80,14 @@ import static accord.impl.CommandChange.toIterableSetFields;
 import static accord.impl.CommandChange.unsetFieldIsNull;
 import static accord.impl.CommandChange.unsetIterableFields;
 import static accord.impl.CommandChange.validateFlags;
+import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
 import static accord.utils.Invariants.illegalState;
+
+;
+;
 
 public class InMemoryJournal implements Journal
 {
@@ -89,15 +95,15 @@ public class InMemoryJournal implements Journal
     private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
     private final Node.Id id;
+    private final Agent agent;
 
-    public InMemoryJournal(Node.Id id)
+    public InMemoryJournal(Node.Id id, Agent agent)
     {
         this.id = id;
+        this.agent = agent;
     }
-
     @Override
     public Command loadCommand(int commandStoreId, TxnId txnId,
-                               // TODO: currently unused!
                                RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
@@ -109,19 +115,61 @@ public class InMemoryJournal implements Journal
         if (saved == null)
             return null;
 
-        return reconstruct(saved);
+        Builder builder = reconstruct(saved, ALL);
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        switch (cleanup)
+        {
+            case EXPUNGE_PARTIAL:
+            case EXPUNGE:
+            case ERASE:
+                return ErasedSafeCommand.erased(txnId, ErasedOrVestigial);
+        }
+
+        return builder.construct();
     }
 
-    private Command reconstruct(List<Diff> saved)
+    @Override
+    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
-        InMemoryJournal.Builder builder = null;
+        Builder builder = reconstruct(commandStoreId, txnId, load);
+        if (builder.isEmpty())
+            return null;
+
+        Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
+        switch (cleanup)
+        {
+            case EXPUNGE_PARTIAL:
+            case EXPUNGE:
+            case ERASE:
+                return null;
+        }
+        Invariants.checkState(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
+        return builder.asMinimal();
+    }
+
+    private Builder reconstruct(int commandStoreId, TxnId txnId, Load load)
+    {
+        NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
+
+        if (commandStore == null)
+            return null;
+
+        return reconstruct(this.diffsPerCommandStore.get(commandStoreId).get(txnId), load);
+    }
+
+    private Builder reconstruct(List<Diff> saved, Load load)
+    {
+        if (saved == null)
+            return null;
+
+        Builder builder = null;
         for (Diff diff : saved)
         {
             if (builder == null)
-                builder = new InMemoryJournal.Builder(diff.txnId);
+                builder = new Builder(diff.txnId, load);
             builder.apply(diff);
         }
-        return builder.construct();
+        return builder;
     }
 
     @Override
@@ -220,9 +268,11 @@ public class InMemoryJournal implements Journal
             {
                 List<Diff> diffs = e2.getValue();
                 if (diffs.isEmpty()) continue;
-                Command command =  reconstruct(diffs);
-                if (command.status() == Truncated || command.status() == Invalidated)
+                InMemoryJournal.Builder builder = reconstruct(diffs, ALL);
+                if (builder.saveStatus().status == Truncated || builder.saveStatus().status == Invalidated)
                     continue; // Already truncated
+
+                Command command = builder.construct();
                 Cleanup cleanup = Cleanup.shouldCleanup(store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
                 switch (cleanup)
                 {
@@ -269,7 +319,7 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
                 if (e.getValue().isEmpty()) continue;
-                Command command = reconstruct(e.getValue());
+                Command command = reconstruct(e.getValue(), ALL).construct();
                 Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
                 loader.load(command, sync);
@@ -441,9 +491,9 @@ public class InMemoryJournal implements Journal
 
     private static class Builder extends CommandChange.Builder
     {
-        private Builder(TxnId txnId)
+        private Builder(TxnId txnId, Load load)
         {
-            super(txnId, ALL);
+            super(txnId, load);
         }
 
         private void apply(Diff diff)
