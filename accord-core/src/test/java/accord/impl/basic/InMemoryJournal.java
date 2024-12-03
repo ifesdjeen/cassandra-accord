@@ -53,6 +53,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
+import accord.utils.PersistentField;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.Load.ALL;
@@ -85,9 +86,6 @@ import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
 import static accord.utils.Invariants.illegalState;
-
-;
-;
 
 public class InMemoryJournal implements Journal
 {
@@ -228,6 +226,12 @@ public class InMemoryJournal implements Journal
         if (fieldStates == null)
             return null;
         return fieldStates.newRangesForEpoch;
+    }
+
+    @Override
+    public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister()
+    {
+        throw new UnsupportedOperationException("Not implemented");
     }
 
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)

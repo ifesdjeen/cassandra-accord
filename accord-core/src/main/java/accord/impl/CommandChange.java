@@ -88,125 +88,6 @@ public class CommandChange
         public static final Fields[] FIELDS = values();
     }
 
-    // TODO (required): calculate flags once
-    public static boolean anyFieldChanged(int flags)
-    {
-        return (flags >>> 16) != 0;
-    }
-
-    public static int validateFlags(int flags)
-    {
-        Invariants.checkState(0 == (~(flags >>> 16) & (flags & 0xffff)));
-        return flags;
-    }
-
-    @VisibleForTesting
-    public static int getFlags(Command before, Command after)
-    {
-        int flags = 0;
-
-        flags = collectFlags(before, after, Command::executeAt, true, EXECUTE_AT, flags);
-        flags = collectFlags(before, after, Command::executesAtLeast, true, EXECUTES_AT_LEAST, flags);
-        flags = collectFlags(before, after, Command::saveStatus, false, SAVE_STATUS, flags);
-        flags = collectFlags(before, after, Command::durability, false, DURABILITY, flags);
-
-        flags = collectFlags(before, after, Command::acceptedOrCommitted, false, ACCEPTED, flags);
-        flags = collectFlags(before, after, Command::promised, false, PROMISED, flags);
-
-        flags = collectFlags(before, after, Command::participants, true, PARTICIPANTS, flags);
-        flags = collectFlags(before, after, Command::partialTxn, false, PARTIAL_TXN, flags);
-        flags = collectFlags(before, after, Command::partialDeps, false, PARTIAL_DEPS, flags);
-
-        // TODO: waitingOn vs WaitingOnWithExecutedAt?
-        flags = collectFlags(before, after, CommandChange::getWaitingOn, true, WAITING_ON, flags);
-
-        flags = collectFlags(before, after, Command::writes, false, WRITES, flags);
-
-        // Special-cased for Journal BurnTest integration
-        if ((before != null && after.result() != before.result()) ||
-            (before == null && after.result() != null))
-        {
-            flags = collectFlags(before, after, Command::writes, false, RESULT, flags);
-        }
-
-        return flags;
-    }
-
-    public static Command.WaitingOn getWaitingOn(Command command)
-    {
-        if (command instanceof Command.Committed)
-            return command.asCommitted().waitingOn();
-
-        return null;
-    }
-
-    private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch, Fields field, int flags)
-    {
-        VAL l = null;
-        VAL r = null;
-        if (lo != null) l = convert.apply(lo);
-        if (ro != null) r = convert.apply(ro);
-
-        if (l == r)
-            return flags; // no change
-
-        if (r == null)
-            flags = setFieldIsNull(field, flags);
-
-        if (l == null || r == null)
-            return setFieldChanged(field, flags);
-
-        assert allowClassMismatch || l.getClass() == r.getClass() : String.format("%s != %s", l.getClass(), r.getClass());
-
-        if (l.equals(r))
-            return flags; // no change
-
-        return setFieldChanged(field, flags);
-    }
-
-    public static int setFieldChanged(Fields field, int oldFlags)
-    {
-        return oldFlags | (0x10000 << field.ordinal());
-    }
-
-    @VisibleForTesting
-    public static boolean getFieldChanged(Fields field, int oldFlags)
-    {
-        return (oldFlags & (0x10000 << field.ordinal())) != 0;
-    }
-
-    public static int toIterableSetFields(int flags)
-    {
-        return flags >>> 16;
-    }
-
-    public static Fields nextSetField(int iterable)
-    {
-        int i = Integer.numberOfTrailingZeros(Integer.lowestOneBit(iterable));
-        return i == 32 ? null : FIELDS[i];
-    }
-
-    public static int unsetIterableFields(Fields field, int iterable)
-    {
-        return iterable & ~(1 << field.ordinal());
-    }
-
-    @VisibleForTesting
-    public static boolean getFieldIsNull(Fields field, int oldFlags)
-    {
-        return (oldFlags & (1 << field.ordinal())) != 0;
-    }
-
-    public static int unsetFieldIsNull(Fields field, int oldFlags)
-    {
-        return oldFlags & ~(1 << field.ordinal());
-    }
-
-    public static int setFieldIsNull(Fields field, int oldFlags)
-    {
-        return oldFlags | (1 << field.ordinal());
-    }
-
     public static class Builder
     {
         protected final int mask;
@@ -266,7 +147,7 @@ public class CommandChange
             return executeAt;
         }
 
-        // TODO: why unused?
+        // TODO: why is this unused in BurnTest
         public Timestamp executeAtLeast()
         {
             return executeAtLeast;
@@ -388,7 +269,6 @@ public class CommandChange
             return cleanup;
         }
 
-        // TODO (expected): avoid allocating new builder
         public Builder maybeCleanup(Cleanup cleanup)
         {
             if (saveStatus() == null)
@@ -462,7 +342,6 @@ public class CommandChange
             builder.count++;
             builder.nextCalled = true;
 
-            // TODO: these accesses can be abstracted away
             if (saveStatus != null)
             {
                 builder.flags = setFieldChanged(SAVE_STATUS, builder.flags);
@@ -567,7 +446,7 @@ public class CommandChange
 
         public String toString()
         {
-            return "Diff {" +
+            return "Builder {" +
                    "txnId=" + txnId +
                    ", executeAt=" + executeAt +
                    ", saveStatus=" + saveStatus +
@@ -583,12 +462,28 @@ public class CommandChange
         }
     }
 
+    /**
+     * Helpers
+     */
+
     public interface WaitingOnProvider
     {
         Command.WaitingOn provide(TxnId txnId, PartialDeps deps);
     }
 
-    private static int mask(Fields... fields)
+    public static Command.WaitingOn getWaitingOn(Command command)
+    {
+        if (command instanceof Command.Committed)
+            return command.asCommitted().waitingOn();
+
+        return null;
+    }
+
+    /**
+     * Managing masks
+     */
+
+    public static int mask(Fields... fields)
     {
         int mask = -1;
         for (Fields field : fields)
@@ -604,4 +499,120 @@ public class CommandChange
     {
         return LOAD_MASKS[load.ordinal()];
     }
+
+    /**
+     * Managing flags
+     */
+
+    @VisibleForTesting
+    public static int getFlags(Command before, Command after)
+    {
+        int flags = 0;
+
+        flags = collectFlags(before, after, Command::executeAt, true, EXECUTE_AT, flags);
+        flags = collectFlags(before, after, Command::executesAtLeast, true, EXECUTES_AT_LEAST, flags);
+        flags = collectFlags(before, after, Command::saveStatus, false, SAVE_STATUS, flags);
+        flags = collectFlags(before, after, Command::durability, false, DURABILITY, flags);
+
+        flags = collectFlags(before, after, Command::acceptedOrCommitted, false, ACCEPTED, flags);
+        flags = collectFlags(before, after, Command::promised, false, PROMISED, flags);
+
+        flags = collectFlags(before, after, Command::participants, true, PARTICIPANTS, flags);
+        flags = collectFlags(before, after, Command::partialTxn, false, PARTIAL_TXN, flags);
+        flags = collectFlags(before, after, Command::partialDeps, false, PARTIAL_DEPS, flags);
+
+        // TODO: waitingOn vs WaitingOnWithExecutedAt?
+        flags = collectFlags(before, after, CommandChange::getWaitingOn, true, WAITING_ON, flags);
+
+        flags = collectFlags(before, after, Command::writes, false, WRITES, flags);
+
+        // Special-cased for Journal BurnTest integration
+        if ((before != null && after.result() != before.result()) ||
+            (before == null && after.result() != null)) //TODO
+        {
+            flags = collectFlags(before, after, Command::writes, false, RESULT, flags);
+        }
+
+        return flags;
+    }
+
+    private static <OBJ, VAL> int collectFlags(OBJ lo, OBJ ro, Function<OBJ, VAL> convert, boolean allowClassMismatch, Fields field, int flags)
+    {
+        VAL l = null;
+        VAL r = null;
+        if (lo != null) l = convert.apply(lo);
+        if (ro != null) r = convert.apply(ro);
+
+        if (l == r)
+            return flags; // no change
+
+        if (r == null)
+            flags = setFieldIsNull(field, flags);
+
+        if (l == null || r == null)
+            return setFieldChanged(field, flags);
+
+        assert allowClassMismatch || l.getClass() == r.getClass() : String.format("%s != %s", l.getClass(), r.getClass());
+
+        if (l.equals(r))
+            return flags; // no change
+
+        return setFieldChanged(field, flags);
+    }
+
+    // TODO (required): calculate flags once
+    public static boolean anyFieldChanged(int flags)
+    {
+        return (flags >>> 16) != 0;
+    }
+
+    public static int validateFlags(int flags)
+    {
+        Invariants.checkState(0 == (~(flags >>> 16) & (flags & 0xffff)));
+        return flags;
+    }
+
+    public static int setFieldChanged(Fields field, int oldFlags)
+    {
+        return oldFlags | (0x10000 << field.ordinal());
+    }
+
+    @VisibleForTesting
+    public static boolean getFieldChanged(Fields field, int oldFlags)
+    {
+        return (oldFlags & (0x10000 << field.ordinal())) != 0;
+    }
+
+    public static int toIterableSetFields(int flags)
+    {
+        return flags >>> 16;
+    }
+
+    public static Fields nextSetField(int iterable)
+    {
+        int i = Integer.numberOfTrailingZeros(Integer.lowestOneBit(iterable));
+        return i == 32 ? null : FIELDS[i];
+    }
+
+    public static int unsetIterableFields(Fields field, int iterable)
+    {
+        return iterable & ~(1 << field.ordinal());
+    }
+
+    @VisibleForTesting
+    public static boolean getFieldIsNull(Fields field, int oldFlags)
+    {
+        return (oldFlags & (1 << field.ordinal())) != 0;
+    }
+
+    public static int unsetFieldIsNull(Fields field, int oldFlags)
+    {
+        return oldFlags & ~(1 << field.ordinal());
+    }
+
+    public static int setFieldIsNull(Fields field, int oldFlags)
+    {
+        return oldFlags | (1 << field.ordinal());
+    }
+
 }

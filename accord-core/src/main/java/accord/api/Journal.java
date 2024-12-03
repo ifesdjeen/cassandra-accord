@@ -29,6 +29,7 @@ import accord.local.RedundantBefore;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.PersistentField.Persister;
 
 /**
  * Persisted journal for transactional recovery.
@@ -48,6 +49,8 @@ public interface Journal
     NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId);
     NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId);
     CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId);
+
+    Persister<DurableBefore, DurableBefore> durableBeforePersister();
 
     void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
 

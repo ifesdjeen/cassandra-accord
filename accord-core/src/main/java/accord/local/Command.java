@@ -59,7 +59,7 @@ import static accord.local.Command.AbstractCommand.validate;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
-import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.ErasedOrVestigial;
 import static accord.primitives.SaveStatus.Uninitialised;
@@ -1421,7 +1421,7 @@ public abstract class Command implements CommonAttributes
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            Unseekables<?> executionParticipants = participants.route.slice(ranges, Minimal);
+                            Unseekables<?> executionParticipants = participants.route.slice(ranges, Slice.Minimal);
                             deps.rangeDeps.forEach(executionParticipants, update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
                                 if (id.epoch() >= epoch && id.epoch() < maxEpoch)
@@ -1453,7 +1453,7 @@ public abstract class Command implements CommonAttributes
 
             public static Update unsafeInitialise(TxnId txnId, Ranges executeRanges, Route<?> route, Deps deps)
             {
-                Unseekables<?> executionParticipants = route.slice(executeRanges, Minimal);
+                Unseekables<?> executionParticipants = route.slice(executeRanges, Slice.Minimal);
                 Update update = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps);
                 // TODO (expected): refactor this to operate only on participants, not ranges
                 deps.rangeDeps.forEach(executionParticipants, update, Update::initialise);
