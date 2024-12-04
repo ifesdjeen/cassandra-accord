@@ -20,7 +20,7 @@ package accord.impl.basic;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -57,6 +57,7 @@ import accord.utils.PersistentField;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.Load.ALL;
+import static accord.impl.CommandChange.*;
 import static accord.impl.CommandChange.Fields.ACCEPTED;
 import static accord.impl.CommandChange.Fields.DURABILITY;
 import static accord.impl.CommandChange.Fields.EXECUTES_AT_LEAST;
@@ -130,7 +131,7 @@ public class InMemoryJournal implements Journal
     public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         Builder builder = reconstruct(commandStoreId, txnId, load);
-        if (builder.isEmpty())
+        if (builder == null || builder.isEmpty())
             return null;
 
         Cleanup cleanup = builder.shouldCleanup(agent, redundantBefore, durableBefore);
@@ -141,6 +142,7 @@ public class InMemoryJournal implements Journal
             case ERASE:
                 return null;
         }
+
         Invariants.checkState(builder.saveStatus() != null, "No saveSatus loaded, but next was called and cleanup was not: %s", builder);
         return builder.asMinimal();
     }
@@ -174,10 +176,7 @@ public class InMemoryJournal implements Journal
     public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
         Diff diff;
-        if (update == null
-            || update.before == update.after
-            || update.after.saveStatus() == SaveStatus.Uninitialised
-            || (diff = toDiff(update)) == null)
+        if ((diff = toDiff(update)) == null)
         {
             if (onFlush!= null)
                 onFlush.run();
@@ -186,7 +185,7 @@ public class InMemoryJournal implements Journal
 
         diffsPerCommandStore.computeIfAbsent(store, (k) -> new TreeMap<>())
                             .computeIfAbsent(update.txnId, (k_) -> new ArrayList<>())
-                            .add(toDiff(update));
+                            .add(diff);
 
         if (onFlush!= null)
             onFlush.run();
@@ -234,6 +233,7 @@ public class InMemoryJournal implements Journal
         throw new UnsupportedOperationException("Not implemented");
     }
 
+    @Override
     public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
         FieldUpdates fieldStates = this.fieldStates.computeIfAbsent(store, s -> {
@@ -311,6 +311,7 @@ public class InMemoryJournal implements Journal
         for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> diffEntry : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = diffEntry.getKey();
+
             // copy to avoid concurrent modification when appending to journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>(diffEntry.getValue());
 
@@ -333,7 +334,7 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    static class ErasedList extends AbstractList<Diff>
+    private static class ErasedList extends AbstractList<Diff>
     {
         final Diff erased;
 
@@ -374,11 +375,9 @@ public class InMemoryJournal implements Journal
         }
     }
 
-    static class PurgedList extends AbstractList<Diff>
+    private static class PurgedList extends AbstractList<Diff>
     {
-        PurgedList()
-        {
-        }
+        PurgedList() {}
 
         @Override
         public Diff get(int index)
@@ -402,30 +401,38 @@ public class InMemoryJournal implements Journal
         }
     }
 
+    private static Diff toDiff(CommandUpdate update)
+    {
+        if (update == null
+            || update.before == update.after
+            || update.after == null
+            || update.after.saveStatus() == SaveStatus.Uninitialised)
+            return null;
+
+        int flags = validateFlags(getFlags(update.before, update.after));
+        if (!anyFieldChanged(flags))
+            return null;
+
+        return new Diff(flags, update);
+    }
+
     private static class Diff
     {
         public final TxnId txnId;
-        public final Map<CommandChange.Fields, Object> changes;
+        public final Map<Fields, Object> changes;
         public final int flags;
-
-        private Diff(TxnId txnId, Map<CommandChange.Fields, Object> changes, int flags)
-        {
-            this.txnId = txnId;
-            this.changes = changes;
-            this.flags = flags;
-        }
 
         private Diff(int flags, CommandUpdate update)
         {
             this.flags = flags;
             this.txnId = update.txnId;
-            this.changes = new HashMap<>();
+            this.changes = new EnumMap<>(Fields.class);
 
             Command after = update.after;
             int iterable = toIterableSetFields(flags);
             while (iterable != 0)
             {
-                CommandChange.Fields field = nextSetField(iterable);
+                Fields field = nextSetField(iterable);
                 if (!getFieldChanged(field, flags) || getFieldIsNull(field, flags))
                 {
                     iterable = unsetIterableFields(field, iterable);
@@ -463,7 +470,7 @@ public class InMemoryJournal implements Journal
                         break;
                     case WAITING_ON:
                         Command.WaitingOn waitingOn = getWaitingOn(after);
-                        changes.put(WAITING_ON, (CommandChange.WaitingOnProvider) (txnId, deps) -> waitingOn);
+                        changes.put(WAITING_ON, (WaitingOnProvider) (txnId, deps) -> waitingOn);
                         break;
                     case WRITES:
                         changes.put(WRITES, after.writes());
@@ -477,20 +484,6 @@ public class InMemoryJournal implements Journal
                 iterable = unsetIterableFields(field, iterable);
             }
         }
-    }
-
-    private static Diff toDiff(CommandUpdate update)
-    {
-        if (update.before == update.after
-            || update.after == null
-            || update.after.saveStatus() == SaveStatus.Uninitialised)
-            return null;
-
-        int flags = validateFlags(getFlags(update.before, update.after));
-        if (!anyFieldChanged(flags))
-            return null;
-
-        return new Diff(flags, update);
     }
 
     private static class Builder extends CommandChange.Builder
@@ -510,7 +503,7 @@ public class InMemoryJournal implements Journal
             int iterable = toIterableSetFields(diff.flags);
             while (iterable != 0)
             {
-                CommandChange.Fields field = nextSetField(iterable);
+                Fields field = nextSetField(iterable);
                 if (getFieldChanged(field, diff.flags))
                 {
                     this.flags = setFieldChanged(field, this.flags);
@@ -530,7 +523,7 @@ public class InMemoryJournal implements Journal
             }
         }
 
-        private void setNull(CommandChange.Fields field)
+        private void setNull(Fields field)
         {
             switch (field)
             {
@@ -575,7 +568,7 @@ public class InMemoryJournal implements Journal
             }
         }
 
-        private void deserialize(Diff diff, CommandChange.Fields field)
+        private void deserialize(Diff diff, Fields field)
         {
             switch (field)
             {
@@ -607,7 +600,7 @@ public class InMemoryJournal implements Journal
                     partialDeps = Invariants.nonNull((PartialDeps) diff.changes.get(PARTIAL_DEPS));
                     break;
                 case WAITING_ON:
-                    waitingOn = Invariants.nonNull((CommandChange.WaitingOnProvider) diff.changes.get(WAITING_ON));
+                    waitingOn = Invariants.nonNull((WaitingOnProvider) diff.changes.get(WAITING_ON));
                     break;
                 case WRITES:
                     writes = Invariants.nonNull((Writes) diff.changes.get(WRITES));
@@ -619,70 +612,5 @@ public class InMemoryJournal implements Journal
                     throw new IllegalStateException();
             }
         }
-    }
-
-    private static Diff serialize(Command after, int flags)
-    {
-        Invariants.checkState(flags != 0);
-        int flagsCopy = flags;
-
-        int iterable = toIterableSetFields(flags);
-        Map<CommandChange.Fields, Object> changes = new HashMap<>();
-        while (iterable != 0)
-        {
-            CommandChange.Fields field = nextSetField(iterable);
-            if (getFieldIsNull(field, flags))
-            {
-                iterable = unsetIterableFields(field, iterable);
-                continue;
-            }
-
-            switch (field)
-            {
-                case EXECUTE_AT:
-                    changes.put(EXECUTE_AT, after.executeAt());
-                    break;
-                case EXECUTES_AT_LEAST:
-                    changes.put(EXECUTES_AT_LEAST, after.executesAtLeast());
-                    break;
-                case SAVE_STATUS:
-                    changes.put(SAVE_STATUS, after.saveStatus());
-                    break;
-                case DURABILITY:
-                    changes.put(DURABILITY, after.durability());
-                    break;
-                case ACCEPTED:
-                    changes.put(ACCEPTED, after.acceptedOrCommitted());
-                    break;
-                case PROMISED:
-                    changes.put(PROMISED, after.promised());
-                    break;
-                case PARTICIPANTS:
-                    changes.put(PARTICIPANTS, after.participants());
-                    break;
-                case PARTIAL_TXN:
-                    changes.put(PARTIAL_TXN, after.partialTxn());
-                    break;
-                case PARTIAL_DEPS:
-                    changes.put(PARTIAL_DEPS, after.partialDeps());
-                    break;
-                case WAITING_ON:
-                    Command.WaitingOn waitingOn = getWaitingOn(after);
-                    changes.put(WAITING_ON, (CommandChange.WaitingOnProvider) (txnId, deps) -> waitingOn);
-                    break;
-                case WRITES:
-                    changes.put(WRITES, after.writes());
-                    break;
-                case RESULT:
-                    changes.put(RESULT, after.result());
-                    break;
-                case CLEANUP:
-                    throw new IllegalStateException();
-            }
-
-            iterable = unsetIterableFields(field, iterable);
-        }
-
-        return new Diff(after.txnId(), changes, flagsCopy);
     }
 }
