@@ -92,14 +92,22 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public void saveCommand(int store, CommandUpdate diff, Runnable onFlush)
+    public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
     {
-        if (diff != null && diff.before != diff.after && diff.after.saveStatus() == SaveStatus.Uninitialised)
+        Diff diff;
+        if (update == null
+            || update.before == update.after
+            || update.after.saveStatus() == SaveStatus.Uninitialised
+            || (diff = diff(update.before, update.after)) == null)
         {
-            diffsPerCommandStore.computeIfAbsent(store, (k) -> new TreeMap<>())
-                                .computeIfAbsent(diff.txnId, (k_) -> new ArrayList<>())
-                                .add(diff(diff.before, diff.after));
+            if (onFlush!= null)
+                onFlush.run();
+            return;
         }
+
+        diffsPerCommandStore.computeIfAbsent(store, (k) -> new TreeMap<>())
+                            .computeIfAbsent(update.txnId, (k_) -> new ArrayList<>())
+                            .add(diff);
 
         if (onFlush!= null)
             onFlush.run();
