@@ -250,10 +250,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         //       This is necessary for reporting to a bootstrapping replica which TxnId it must not prune from dependencies
         //       i.e. the source replica reports to the target replica those TxnId that STARTED_BEFORE and EXECUTES_AFTER.
 
+        Participants<?> intersecting = participants.touches().intersecting(safeStore.context().keys());
         try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder();
              Deps.AbstractBuilder<Deps> redundantBuilder = new Deps.Builder())
         {
-            safeStore.mapReduceActive(participants.touches(), executeAt, txnId.witnesses(),
+            safeStore.mapReduceActive(intersecting, executeAt, txnId.witnesses(),
                                       (p1, keyOrRange, testTxnId, testExecuteAt, in) -> {
                                           if (p1 == null || !testTxnId.equals(p1))
                                               in.add(keyOrRange, testTxnId);
@@ -261,7 +262,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                                       }, executeAt.equals(txnId) ? null : txnId, builder);
 
             // TODO (required): make sure any sync point is in the past
-            Deps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
+            Deps redundant = safeStore.redundantBefore().collectDeps(intersecting, redundantBuilder, minEpoch, executeAt).build();
             Deps result = builder.build().with(redundant);
             Invariants.checkState(!result.contains(txnId));
             return result;
