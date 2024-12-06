@@ -24,6 +24,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.util.Iterator;
 import java.util.NavigableMap;
 
 import accord.api.Journal;
@@ -88,6 +89,22 @@ public class LoggingJournal implements Journal
     {
         log("%d: %s\n", store, update.after);
         delegate.saveCommand(store, update, onFlush);
+    }
+
+    @Override
+    public Iterator<TopologyUpdate> replayTopologies()
+    {
+        log("REPLAY TOPOLOGIES\n");
+        return delegate.replayTopologies();
+    }
+
+    @Override
+    public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)
+    {
+        log("%d: %s\n", topologyUpdate);
+        if (onFlush != null)
+            onFlush.run();
+        throw new IllegalArgumentException();
     }
 
     @Override

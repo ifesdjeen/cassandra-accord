@@ -18,7 +18,6 @@
 
 package accord.api;
 
-import java.util.Collection;
 import javax.annotation.Nullable;
 
 import accord.local.Node;
@@ -129,6 +128,8 @@ public interface ConfigurationService
          * the initial topology returned by `currentTopology` on startup.
          *
          * TODO (desired): document what this Future represents, or maybe refactor it away - only used for testing
+         *
+         *   * {@param isLoad} - whether current topology update is being loaded from the local node during startup
          */
         AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync);
 
@@ -160,7 +161,7 @@ public interface ConfigurationService
          */
         void onEpochRedundant(Ranges ranges, long epoch);
 
-        default void onRemoveNodes(long epoch, Collection<Node.Id> removed) {}
+        default void onRemoveNode(long epoch, Node.Id removed) {}
     }
 
     void registerListener(Listener listener);

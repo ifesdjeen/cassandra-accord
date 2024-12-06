@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
+import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.api.LocalConfig;
@@ -179,13 +180,14 @@ public class Main
             topology = topologyFactory.toTopology(init.cluster);
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
             LocalConfig localConfig = LocalConfig.DEFAULT;
+            Journal journal = new Cluster.NoOpJournal();
             on = new Node(init.self, sink, new SimpleConfigService(topology),
                           TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,
                           DefaultRemoteListeners::new, DefaultTimeouts::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
                           InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                          DurableBefore.NOOP_PERSISTER, localConfig);
+                          DurableBefore.NOOP_PERSISTER, localConfig, journal);
             awaitUninterruptibly(on.unsafeStart());
             err.println("Initialized node " + init.self);
             err.flush();

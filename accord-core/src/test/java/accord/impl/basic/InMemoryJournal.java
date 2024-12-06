@@ -21,6 +21,7 @@ package accord.impl.basic;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -91,6 +92,7 @@ import static accord.utils.Invariants.illegalState;
 public class InMemoryJournal implements Journal
 {
     private final Int2ObjectHashMap<NavigableMap<TxnId, List<Diff>>> diffsPerCommandStore = new Int2ObjectHashMap<>();
+    private final List<TopologyUpdate> topologyUpdates = new ArrayList<>();
     private final Int2ObjectHashMap<FieldUpdates> fieldStates = new Int2ObjectHashMap<>();
 
     private final Node.Id id;
@@ -101,6 +103,7 @@ public class InMemoryJournal implements Journal
         this.id = id;
         this.agent = agent;
     }
+
     @Override
     public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
@@ -188,6 +191,44 @@ public class InMemoryJournal implements Journal
 
         if (onFlush!= null)
             onFlush.run();
+    }
+
+    @Override
+    public Iterator<TopologyUpdate> replayTopologies()
+    {
+        return new Iterator<>()
+        {
+            int current = 0;
+            public boolean hasNext()
+            {
+                return current < topologyUpdates.size();
+            }
+
+            public TopologyUpdate next()
+            {
+                return topologyUpdates.get(current++);
+            }
+        };
+    }
+
+    @Override
+    public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)
+    {
+        topologyUpdates.add(topologyUpdate);
+        if (onFlush != null)
+            onFlush.run();
+    }
+
+    public void truncateTopologiesForTesting(long minEpoch)
+    {
+        List<TopologyUpdate> next = new ArrayList<>();
+        for (int i = 0; i < topologyUpdates.size(); i++)
+        {
+            TopologyUpdate update = topologyUpdates.get(i);
+            if (update.global.epoch() >= minEpoch)
+                next.add(update);
+        }
+        topologyUpdates.retainAll(next);
     }
 
     @Override

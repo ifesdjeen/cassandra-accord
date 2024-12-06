@@ -20,7 +20,6 @@ package accord.topology;
 
 import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -554,14 +553,14 @@ public class TopologyManager
         epochs.syncComplete(node, epoch);
     }
 
-    public synchronized void onRemoveNodes(long removedIn, Collection<Id> removed)
+    // TODO (now, correctness): it seems to be wrong to count removed nodes towards sync quorums.
+    public synchronized void onRemoveNode(long removedIn, Id removed)
     {
         for (long epoch = removedIn, min = minEpoch(); epoch >= min; epoch--)
         {
             EpochState state = epochs.get(epoch);
             if (state == null || state.hasReachedQuorum()) continue;
-            for (Id node : removed)
-                epochs.syncComplete(node, epoch);
+            epochs.syncComplete(removed, epoch);
         }
     }
 

@@ -140,14 +140,19 @@ class Bootstrap
             Ranges commitRanges = valid;
             safeStore = safeStore;
             // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
-            safeStore.commandStore().submit(empty(), safeStore0 -> {
-                store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
-                return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
-            }).flatMap(i -> i).flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(empty(), safeStore1 -> {
-                if (valid.isEmpty()) // we've lost ownership of the range
-                    return AsyncResults.success(Ranges.EMPTY);
-                return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
-            }))).flatMap(i -> i).begin(this);
+            safeStore.commandStore()
+                     .submit(empty(), safeStore0 -> {
+                         store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
+                         return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
+                     })
+                     .flatMap(i -> i)
+                     .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(empty(), safeStore1 -> {
+                         if (valid.isEmpty()) // we've lost ownership of the range
+                             return AsyncResults.success(Ranges.EMPTY);
+                         return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
+                     })))
+                     .flatMap(i -> i)
+                     .begin(this);
         }
 
         // we no longer want to fetch these ranges (perhaps we no longer own them)

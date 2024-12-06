@@ -20,6 +20,7 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -40,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
+import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
@@ -61,6 +63,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -86,6 +89,7 @@ public abstract class CommandStores
                              Agent agent,
                              DataStore store,
                              RandomSource random,
+                             Journal journal,
                              ShardDistributor shardDistributor,
                              ProgressLog.Factory progressLogFactory,
                              LocalListeners.Factory listenersFactory);
@@ -126,6 +130,17 @@ public abstract class CommandStores
         ShardHolder(CommandStore store)
         {
             this.store = store;
+        }
+
+        private ShardHolder(CommandStore store, RangesForEpoch ranges)
+        {
+            this.store = store;
+            this.ranges = ranges;
+        }
+
+        public ShardHolder withStoreUnsafe(CommandStore store)
+        {
+            return new ShardHolder(store, ranges);
         }
 
         RangesForEpoch ranges()
@@ -343,40 +358,96 @@ public abstract class CommandStores
         }
     }
 
-    protected static class Snapshot
+    // This method should only be used on node startup.
+    // "Unsafe" because it relies on user to synchronise and sequence the call properly.
+    public void restoreShardStateUnsafe(Consumer<Topology> reportTopology)
+    {
+        Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
+        // First boot
+        if (!iter.hasNext())
+            return;
+
+        Journal.TopologyUpdate lastUpdate = null;
+        while (iter.hasNext())
+        {
+            Journal.TopologyUpdate update = iter.next();
+            reportTopology.accept(update.global);
+            if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
+                lastUpdate = update;
+        }
+
+        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
+        int i = 0;
+        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
+        {
+            RangesForEpoch ranges = e.getValue();
+            CommandStore commandStore = null;
+            for (ShardHolder shard : current.shards)
+            {
+                if (shard.ranges.equals(ranges))
+                    commandStore = shard.store;
+            }
+            Invariants.nonNull(commandStore, "Command store should have been reloaded").restore();
+            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+            shards[i++] = shard;
+        }
+
+        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
+    }
+
+    protected void loadSnapshot(Snapshot toLoad)
+    {
+        current = toLoad;
+    }
+
+    protected static class Snapshot extends Journal.TopologyUpdate
     {
         public final ShardHolder[] shards;
-        final Int2ObjectHashMap<CommandStore> byId;
-        final Topology local;
-        final Topology global;
+        public final Int2ObjectHashMap<CommandStore> byId;
 
         Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
+            super(asMap(shards), local, global);
             this.shards = shards;
             this.byId = new Int2ObjectHashMap<>(shards.length, Hashing.DEFAULT_LOAD_FACTOR, true);
             for (ShardHolder shard : shards)
                 byId.put(shard.store.id(), shard.store);
-            this.local = local;
-            this.global = global;
+        }
+
+        // This method exists to ensure we do not hold references to command stores
+        public Journal.TopologyUpdate asTopologyUpdate()
+        {
+            return new Journal.TopologyUpdate(commandStores, local, global);
+        }
+
+        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards)
+        {
+            Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores = new Int2ObjectHashMap<>();
+            for (ShardHolder shard : shards)
+                commandStores.put(shard.store.id, shard.ranges);
+            return commandStores;
         }
     }
 
     final StoreSupplier supplier;
     final ShardDistributor shardDistributor;
+    final Journal journal;
     volatile Snapshot current;
     int nextId;
 
-    private CommandStores(StoreSupplier supplier, ShardDistributor shardDistributor)
+    private CommandStores(StoreSupplier supplier, ShardDistributor shardDistributor, Journal journal)
     {
         this.supplier = supplier;
         this.shardDistributor = shardDistributor;
+
         this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY);
+        this.journal = journal;
     }
 
-    public CommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor,
+    public CommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, Journal journal, ShardDistributor shardDistributor,
                          ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory)
     {
-        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory), shardDistributor);
+        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory), shardDistributor, journal);
     }
 
     public Topology local()
@@ -693,7 +764,20 @@ public abstract class CommandStores
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)
     {
         TopologyUpdate update = updateTopology(node, current, newTopology, startSync);
-        current = update.snapshot;
+        if (update.snapshot != current)
+        {
+            AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
+            journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> flush.setSuccess(null));
+            current = update.snapshot;
+            return () -> {
+                EpochReady ready = update.bootstrap.get();
+                return new EpochReady(ready.epoch,
+                                      flush.flatMap(ignore -> ready.metadata).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.coordinate).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.data).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.reads).beginAsResult());
+            };
+        }
         return update.bootstrap;
     }
 

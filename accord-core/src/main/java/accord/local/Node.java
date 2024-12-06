@@ -43,6 +43,7 @@ import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
+import accord.api.Journal;
 import accord.api.LocalConfig;
 import accord.api.LocalListeners;
 import accord.api.MessageSink;
@@ -184,7 +185,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
                 Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, Timeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
                 Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
                 Persister<DurableBefore, DurableBefore> durableBeforePersister,
-                LocalConfig localConfig)
+                LocalConfig localConfig, Journal journal)
     {
         this.id = id;
         this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
@@ -201,7 +202,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.agent = agent;
         this.random = random;
         this.persistDurableBefore = new PersistentField<>(() -> durableBefore, DurableBefore::merge, durableBeforePersister, this::setPersistedDurableBefore);
-        this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
+        this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.durabilityScheduling = new DurabilityScheduling(this);
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forEachCommandStore(store -> store.progressLog.maybeNotify()), 1, SECONDS);
@@ -355,9 +356,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Override
-    public void onRemoveNodes(long epoch, Collection<Id> removed)
+    public void onRemoveNode(long epoch, Id removed)
     {
-        topology.onRemoveNodes(epoch, removed);
+        topology.onRemoveNode(epoch, removed);
     }
 
     @Override

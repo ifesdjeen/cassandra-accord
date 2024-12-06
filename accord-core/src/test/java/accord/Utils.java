@@ -44,6 +44,7 @@ import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TestAgent;
+import accord.impl.basic.InMemoryJournal;
 import accord.impl.list.ListQuery;
 import accord.impl.list.ListRead;
 import accord.impl.list.ListUpdate;
@@ -199,7 +200,8 @@ public class Utils
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             localConfig);
+                             localConfig,
+                             new InMemoryJournal(nodeId, agent));
         awaitUninterruptibly(node.unsafeStart());
         return node;
     }

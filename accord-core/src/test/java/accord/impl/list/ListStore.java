@@ -46,6 +46,7 @@ import accord.coordinate.Truncated;
 import accord.coordinate.tracking.AllTracker;
 import accord.impl.basic.SimulatedFault;
 import accord.local.CommandStore;
+import accord.local.CommandStores;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.Range;
@@ -518,12 +519,12 @@ public class ListStore implements DataStore
         return new TreeMap<>(data);
     }
 
-    public void checkAtLeast(CommandStore[] commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a)
+    public void checkAtLeast(CommandStores commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a)
     {
         checkAtLeast(commandStores, a, data);
     }
 
-    public static void checkAtLeast(CommandStore[] commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
+    public static void checkAtLeast(CommandStores commandStores, NavigableMap<RoutableKey, Timestamped<int[]>> a, NavigableMap<RoutableKey, Timestamped<int[]>> b)
     {
         if (a.isEmpty())
             return;
@@ -534,7 +535,7 @@ public class ListStore implements DataStore
             Timestamped<int[]> bv = b.get(k);
             if (bv == null || bv.timestamp.compareTo(av.timestamp) < 0)
             {
-                for (CommandStore commandStore : commandStores)
+                for (CommandStore commandStore : commandStores.all())
                 {
                     if (!commandStore.unsafeGetRangesForEpoch().allSince(av.timestamp.epoch()).contains(k))
                         continue;

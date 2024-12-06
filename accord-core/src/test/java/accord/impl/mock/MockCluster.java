@@ -33,6 +33,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.NetworkFilter;
+import accord.api.Agent;
+import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.LocalConfig;
 import accord.coordinate.CoordinationAdapter;
@@ -40,6 +42,7 @@ import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.IntKey;
 import accord.impl.DefaultLocalListeners;
+import accord.impl.basic.InMemoryJournal;
 import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
@@ -130,13 +133,15 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         MessageSink messageSink = messageSinkFactory.apply(id, this);
         MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
         LocalConfig localConfig = LocalConfig.DEFAULT;
+        Agent agent = new TestAgent();
+        Journal journal = new InMemoryJournal(id, agent);
         Node node = new Node(id,
                              messageSink,
                              configurationService,
                              time,
                              () -> store,
                              new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
-                             new TestAgent(),
+                             agent,
                              random.fork(),
                              new ThreadPoolScheduler(),
                              SizeOfIntersectionSorter.SUPPLIER,
@@ -147,7 +152,8 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              InMemoryCommandStores.SingleThread::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             localConfig);
+                             localConfig,
+                             journal);
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(topology, false, true);
         return node;

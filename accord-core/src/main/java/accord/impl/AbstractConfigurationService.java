@@ -140,7 +140,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         synchronized EpochState getOrCreate(long epoch)
         {
-            Invariants.checkArgument(epoch > 0, "Epoch must be positive but given %d", epoch);
+            Invariants.checkArgument(epoch >= 0, "Epoch must be non-negative but given %d", epoch);
+            Invariants.checkArgument(epoch > 0 || (lastReceived == 0 && epochs.isEmpty()), "Received epoch 0 after initialization. Last received %d, epochsf; %s", lastReceived, epochs);
             if (epochs.isEmpty())
             {
                 EpochState state = createEpochState(epoch);
@@ -177,8 +178,20 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             {
                 long epoch = topology.epoch();
                 logger.debug("Receiving epoch {}", epoch);
-                Invariants.checkState(lastReceived == epoch - 1 || epoch == 0 || lastReceived == 0,
-                                      "Epoch %d != %d + 1", epoch, lastReceived);
+                if (lastReceived >= epoch)
+                {
+                    // If we have already seen the epoch
+                    for (int i = epochs.size() - 1; i >= 0; i--)
+                    {
+                        EpochState expected = epochs.get(i);
+                        if (epoch == expected.epoch)
+                        {
+                            Invariants.checkState(topology.equals(expected.topology),
+                                                  "Expected existing topology to match upsert, but %s != %s", topology, expected.topology);
+                            return;
+                        }
+                    }
+                }
                 state = getOrCreate(epoch);
                 state.topology = topology;
                 lastReceived = epoch;
@@ -286,7 +299,20 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
             maxRequestedEpoch = epoch;
         }
-        fetchTopologyInternal(epoch);
+
+        try
+        {
+            fetchTopologyInternal(epoch);
+        }
+        catch (Throwable t)
+        {
+            // This epoch will not be fetched, so we need to reset it back
+            synchronized (this)
+            {
+                maxRequestedEpoch = 0;
+            }
+            throw t;
+        }
     }
 
     // TODO (expected): rename, sync is too ambiguous
@@ -325,6 +351,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             epochs.acknowledgeFuture(epochs.minEpoch()).addCallback(() -> reportTopology(topology, startSync, isLoad));
             return;
         }
+
         if (lastAcked > 0 && topology.epoch() > lastAcked + 1)
         {
             logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);

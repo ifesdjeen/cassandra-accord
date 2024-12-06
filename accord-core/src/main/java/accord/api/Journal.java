@@ -18,7 +18,9 @@
 
 package accord.api;
 
+import java.util.Iterator;
 import java.util.NavigableMap;
+import java.util.Objects;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -29,30 +31,74 @@ import accord.local.RedundantBefore;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.topology.Topology;
 import accord.utils.PersistentField.Persister;
+import org.agrona.collections.Int2ObjectHashMap;
 
 /**
  * Persisted journal for transactional recovery.
  */
 public interface Journal
 {
-    Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
-    Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore);
 
     // TODO (required): use OnDone instead of Runnable
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
+    Iterator<TopologyUpdate> replayTopologies(); // reverse iterator
+    void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush);
+
     void purge(CommandStores commandStores);
     void replay(CommandStores commandStores);
 
-    RedundantBefore loadRedundantBefore(int commandStoreId);
-    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int commandStoreId);
-    NavigableMap<Timestamp, Ranges> loadSafeToRead(int commandStoreId);
-    CommandStores.RangesForEpoch loadRangesForEpoch(int commandStoreId);
+    RedundantBefore loadRedundantBefore(int store);
+    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store);
+    NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
+    CommandStores.RangesForEpoch loadRangesForEpoch(int store);
 
     Persister<DurableBefore, DurableBefore> durableBeforePersister();
 
     void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
+
+    class TopologyUpdate
+    {
+        public final Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores;
+        public final Topology local;
+        public final Topology global;
+
+        public TopologyUpdate(@Nonnull Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores, @Nonnull Topology local, @Nonnull Topology global)
+        {
+            this.commandStores = commandStores;
+            this.local = local;
+            this.global = global;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            TopologyUpdate update = (TopologyUpdate) object;
+            return Objects.equals(commandStores, update.commandStores) && Objects.equals(local, update.local) && Objects.equals(global, update.global);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(commandStores, local, global);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "TopologyUpdate{" +
+                   "local=" + local +
+                   ", commandStores=" + commandStores +
+                   ", global=" + global +
+                   '}';
+        }
+    }
 
     class CommandUpdate
     {
