@@ -29,9 +29,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -39,6 +41,7 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
+import accord.api.Journal;
 import accord.api.MessageSink;
 import accord.api.Scheduler;
 import accord.api.LocalConfig;
@@ -50,9 +53,12 @@ import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.local.AgentExecutor;
+import accord.local.Command;
+import accord.local.CommandStores;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.RedundantBefore;
 import accord.local.ShardDistributor;
 import accord.local.TimeService;
 import accord.messages.Callback;
@@ -61,7 +67,11 @@ import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
+import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
 import accord.topology.Topology;
+import accord.utils.PersistentField;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -347,7 +357,8 @@ public class Cluster implements Scheduler
                                           MaelstromAgent.INSTANCE,
                                           randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
                                           DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
-                                          DurableBefore.NOOP_PERSISTER, localConfig));
+                                          DurableBefore.NOOP_PERSISTER, localConfig,
+                                          new NoOpJournal()));
             }
 
             AsyncResult<?> startup = AsyncChains.reduce(lookup.values().stream().map(Node::unsafeStart).collect(toList()), (a, b) -> null).beginAsResult();
@@ -372,5 +383,22 @@ public class Cluster implements Scheduler
         {
             lookup.values().forEach(Node::shutdown);
         }
+    }
+
+    public static class NoOpJournal implements Journal
+    {
+        @Override public Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public Command.Minimal loadMinimal(int store, TxnId txnId, Load load, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public void saveCommand(int store, CommandUpdate value, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public Iterator<TopologyUpdate> replayTopologies() { throw new IllegalStateException("Not impelemented"); }
+        @Override public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public void purge(CommandStores commandStores)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public void replay(CommandStores commandStores)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public RedundantBefore loadRedundantBefore(int store) { throw new IllegalStateException("Not impelemented"); }
+        @Override public NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store) { throw new IllegalStateException("Not impelemented"); }
+        @Override public NavigableMap<Timestamp, Ranges> loadSafeToRead(int store) { throw new IllegalStateException("Not impelemented"); }
+        @Override public CommandStores.RangesForEpoch loadRangesForEpoch(int store) { throw new IllegalStateException("Not impelemented"); }
+        @Override public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister() { throw new IllegalStateException("Not impelemented"); }
+        @Override public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
     }
 }

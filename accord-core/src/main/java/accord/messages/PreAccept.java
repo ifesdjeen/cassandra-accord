@@ -31,6 +31,7 @@ import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
@@ -254,11 +255,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     {
         // TODO (expected): do not build covering ranges; no longer especially valuable given use of FullRoute
         // NOTE: ExclusiveSyncPoint *relies* on STARTED_BEFORE to ensure it reports a dependency on *every* earlier TxnId that may execute (before or after it).
-
+        Participants<?> intersecting = participants.touches().intersecting(safeStore.context().keys());
         try (Deps.AbstractBuilder<Deps> builder = new Deps.Builder(true);
              RangeDeps.BuilderByRange redundantBuilder = RangeDeps.builderByRange())
         {
-            RangeDeps redundant = safeStore.redundantBefore().collectDeps(participants.touches(), redundantBuilder, minEpoch, executeAt).build();
+            RangeDeps redundant = safeStore.redundantBefore().collectDeps(intersecting, redundantBuilder, minEpoch, executeAt).build();
             if (nullIfRedundant && !txnId.is(EphemeralRead))
             {
                 TxnId maxRedundantBefore = redundant.maxTxnId(null);
@@ -269,7 +270,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 }
             }
 
-            safeStore.visit(participants.touches(), executeAt, txnId.witnesses(),
+            safeStore.visit(intersecting, executeAt, txnId.witnesses(),
                             (p1, in, keyOrRange, testTxnId) -> {
                                 if (p1 == null || !testTxnId.equals(p1))
                                     in.add(keyOrRange, testTxnId);

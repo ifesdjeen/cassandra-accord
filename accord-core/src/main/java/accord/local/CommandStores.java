@@ -20,6 +20,7 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -40,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
+import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
@@ -86,6 +88,7 @@ public abstract class CommandStores
                              Agent agent,
                              DataStore store,
                              RandomSource random,
+                             Journal journal,
                              ShardDistributor shardDistributor,
                              ProgressLog.Factory progressLogFactory,
                              LocalListeners.Factory listenersFactory);
@@ -126,6 +129,17 @@ public abstract class CommandStores
         ShardHolder(CommandStore store)
         {
             this.store = store;
+        }
+
+        private ShardHolder(CommandStore store, RangesForEpoch ranges)
+        {
+            this.store = store;
+            this.ranges = ranges;
+        }
+
+        public ShardHolder withStoreUnsafe(CommandStore store)
+        {
+            return new ShardHolder(store, ranges);
         }
 
         RangesForEpoch ranges()
@@ -343,40 +357,84 @@ public abstract class CommandStores
         }
     }
 
-    protected static class Snapshot
+    // This method should only be used on node startup.
+    // "Unsafe" because it relies on user to synchronise and sequence the call properly.
+    public void restoreShardStateUnsafe()
+    {
+        Journal.TopologyUpdate update;
+        Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
+        // First boot
+        if (!iter.hasNext())
+            return;
+
+        update = iter.next();
+        ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
+        int i = 0;
+        for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+        {
+            EpochUpdateHolder updateHolder = new EpochUpdateHolder();
+            CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
+            commandStore.restore();
+            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+            shards[i++] = shard;
+        }
+
+        loadSnapshot(new Snapshot(shards, update.local, update.global));
+    }
+
+    protected void loadSnapshot(Snapshot toLoad)
+    {
+        current = toLoad;
+    }
+
+    protected static class Snapshot extends Journal.TopologyUpdate
     {
         public final ShardHolder[] shards;
-        final Int2ObjectHashMap<CommandStore> byId;
-        final Topology local;
-        final Topology global;
+        public final Int2ObjectHashMap<CommandStore> byId;
 
         Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
+            super(asMap(shards), local, global);
             this.shards = shards;
             this.byId = new Int2ObjectHashMap<>(shards.length, Hashing.DEFAULT_LOAD_FACTOR, true);
             for (ShardHolder shard : shards)
                 byId.put(shard.store.id(), shard.store);
-            this.local = local;
-            this.global = global;
+        }
+
+        // This method exists to ensure we do not hold references to command stores
+        public Journal.TopologyUpdate asTopologyUpdate()
+        {
+            return new Journal.TopologyUpdate(commandStores, local, global);
+        }
+
+        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards)
+        {
+            Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores = new Int2ObjectHashMap<>();
+            for (ShardHolder shard : shards)
+                commandStores.put(shard.store.id, shard.ranges);
+            return commandStores;
         }
     }
 
     final StoreSupplier supplier;
     final ShardDistributor shardDistributor;
+    final Journal journal;
     volatile Snapshot current;
     int nextId;
 
-    private CommandStores(StoreSupplier supplier, ShardDistributor shardDistributor)
+    private CommandStores(StoreSupplier supplier, ShardDistributor shardDistributor, Journal journal)
     {
         this.supplier = supplier;
         this.shardDistributor = shardDistributor;
+
         this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY);
+        this.journal = journal;
     }
 
-    public CommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor,
+    public CommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, Journal journal, ShardDistributor shardDistributor,
                          ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory)
     {
-        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory), shardDistributor);
+        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory), shardDistributor, journal);
     }
 
     public Topology local()
@@ -693,7 +751,13 @@ public abstract class CommandStores
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)
     {
         TopologyUpdate update = updateTopology(node, current, newTopology, startSync);
-        current = update.snapshot;
+        // TODO (review/discussion): an alternative to this would be to store all previous topology updates (or base compacted image + updates),
+        //      and compact them into a single record. This can be done either in this patch or in a follow-up.
+        if (update.snapshot != current)
+        {
+            journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> {}); // TODO: durability
+            current = update.snapshot;
+        }
         return update.bootstrap;
     }
 

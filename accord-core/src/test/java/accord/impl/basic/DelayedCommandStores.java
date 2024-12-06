@@ -71,12 +71,12 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
     private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, CacheLoading isLoadedCheck, Journal journal)
     {
-        super(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck, journal));
+        super(time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck, journal));
     }
 
-    public static CommandStores.Factory factory(PendingQueue pending, CacheLoading isLoadedCheck, Journal journal)
+    public static CommandStores.Factory factory(PendingQueue pending, CacheLoading isLoadedCheck)
     {
-        return (time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory) ->
+        return (time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory) ->
                new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent), isLoadedCheck, journal);
     }
 
@@ -89,6 +89,42 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         int prefix = ((PrefixedIntHashKey) range.start()).prefix;
         // we see new prefix when a new prefix is added, so avoid bootstrap in these cases
         return contains(previous, prefix);
+    }
+
+    protected void loadSnapshot(Snapshot nextSnapshot)
+    {
+        Snapshot current = current();
+        // These checks are only applicable to delayed command stores.
+        for (Integer id : current.byId.keySet())
+        {
+            CommandStore prev = current.byId.get(id);
+            CommandStore next = nextSnapshot.byId.get(id);
+            {
+                RedundantBefore orig = prev.unsafeGetRedundantBefore();
+                RedundantBefore loaded = next.unsafeGetRedundantBefore();
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                NavigableMap<TxnId, Ranges> orig = prev.unsafeGetBootstrapBeganAt();
+                NavigableMap<TxnId, Ranges> loaded = next.unsafeGetBootstrapBeganAt();
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                NavigableMap<Timestamp, Ranges> orig = prev.unsafeGetSafeToRead();
+                NavigableMap<Timestamp, Ranges> loaded = next.unsafeGetSafeToRead();
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+
+            {
+                RangesForEpoch orig = prev.unsafeGetRangesForEpoch();
+                RangesForEpoch loaded = next.unsafeGetRangesForEpoch();
+                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
+            }
+        }
+
+        super.loadSnapshot(nextSnapshot);
     }
 
     private static boolean contains(Topology previous, int searchPrefix)
@@ -139,38 +175,39 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             this.executor = executor;
             this.cacheLoading = cacheLoading;
             this.journal = journal;
+            restore();
         }
 
-        @Override
-        public void clearForTesting()
+        protected void loadRedundantBefore(RedundantBefore redundantBefore)
         {
-            super.clearForTesting();
+            if (redundantBefore != null)
+                unsafeSetRedundantBefore(redundantBefore);
+        }
 
-            // Rather than cleaning up and reloading, we can just assert equality during reload
-            {
-                RedundantBefore orig = unsafeGetRedundantBefore();
-                RedundantBefore loaded = journal.loadRedundantBefore(id());
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
-            }
+        protected void loadBootstrapBeganAt(NavigableMap<TxnId, Ranges> bootstrapBeganAt)
+        {
+            if (bootstrapBeganAt != null)
+                unsafeSetBootstrapBeganAt(bootstrapBeganAt);
+        }
 
-            {
-                NavigableMap<TxnId, Ranges> orig = unsafeGetBootstrapBeganAt();
-                NavigableMap<TxnId, Ranges> loaded = journal.loadBootstrapBeganAt(id());
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
-            }
+        protected void loadSafeToRead(NavigableMap<Timestamp, Ranges> safeToRead)
+        {
+            if (safeToRead != null)
+                unsafeSetSafeToRead(safeToRead);
+        }
 
-            {
-                NavigableMap<Timestamp, Ranges> orig = unsafeGetSafeToRead();
-                NavigableMap<Timestamp, Ranges> loaded = journal.loadSafeToRead(id());
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
-            }
+        protected void loadRangesForEpoch(CommandStores.RangesForEpoch rangesForEpoch)
+        {
+            if (rangesForEpoch != null)
+                unsafeSetRangesForEpoch(rangesForEpoch);
+        }
 
-            {
-                RangesForEpoch orig = unsafeGetRangesForEpoch();
-                RangesForEpoch loaded = journal.loadRangesForEpoch(id());
-
-                Invariants.checkState(orig.equals(loaded), "%s should equal %s", loaded, orig);
-            }
+        public void restore()
+        {
+            loadRedundantBefore(journal.loadRedundantBefore(id()));
+            loadBootstrapBeganAt(journal.loadBootstrapBeganAt(id()));
+            loadSafeToRead(journal.loadSafeToRead(id()));
+            loadRangesForEpoch(journal.loadRangesForEpoch(id()));
         }
 
         @Override
