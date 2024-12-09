@@ -27,6 +27,7 @@ import com.google.common.collect.Lists;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.api.Agent;
 import accord.api.LocalConfig;
 import accord.api.ProgressLog.NoOpProgressLog;
 import accord.api.RoutingKey;
@@ -43,6 +44,7 @@ import accord.impl.SizeOfIntersectionSorter;
 import accord.impl.TestAgent;
 import accord.impl.TestAgent.RethrowAgent;
 import accord.impl.TopologyFactory;
+import accord.impl.basic.InMemoryJournal;
 import accord.impl.mock.MockCluster;
 import accord.impl.mock.MockConfigurationService;
 import accord.impl.mock.MockStore;
@@ -101,14 +103,14 @@ public class ImmutableCommandTest
     {
         MockCluster.Clock clock = new MockCluster.Clock(100);
         LocalConfig localConfig = LocalConfig.DEFAULT;
-        Node node = new Node(id, null, new MockConfigurationService(null, (epoch, service) -> { }, storeSupport.local.get()),
-                             clock,
-                             () -> storeSupport.data, new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()), new TestAgent(), new DefaultRandom(), Scheduler.NEVER_RUN_SCHEDULED,
+        Agent agent = new TestAgent();
+        Node node = new Node(id, null, new MockConfigurationService(null, (epoch, service) -> { }, storeSupport.local.get()), clock,
+                             () -> storeSupport.data, new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()), agent, new DefaultRandom(), Scheduler.NEVER_RUN_SCHEDULED,
                              SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new, ignore -> ignore2 -> new NoOpProgressLog(), DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,
-                             localConfig);
+                             localConfig, new InMemoryJournal(id, agent));
         awaitUninterruptibly(node.unsafeStart());
         node.onTopologyUpdate(storeSupport.local.get(), false, true);
         return node;

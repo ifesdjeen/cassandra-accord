@@ -208,6 +208,8 @@ public abstract class CommandStore implements AgentExecutor
         return id;
     }
 
+    public void restore() {};
+
     public abstract Journal.Loader loader();
 
     @Override

@@ -127,9 +127,9 @@ public abstract class InMemoryCommandStore extends CommandStore
     private InMemorySafeStore current;
     private final Journal.Loader loader;
 
-    public InMemoryCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
+    public InMemoryCommandStore(int id, NodeCommandStoreService node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
     {
-        super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
+        super(id, node, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
         this.loader = new CommandLoader(this);
     }
 

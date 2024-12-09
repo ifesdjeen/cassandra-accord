@@ -20,7 +20,6 @@ package accord.topology;
 
 import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -35,11 +34,11 @@ import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
+import accord.api.LocalConfig;
 import accord.api.ProtocolModifiers.QuorumEpochIntersections.Include;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
-import accord.api.LocalConfig;
 import accord.coordinate.EpochTimeout;
 import accord.coordinate.TopologyMismatch;
 import accord.coordinate.tracking.QuorumTracker;
@@ -554,14 +553,13 @@ public class TopologyManager
         epochs.syncComplete(node, epoch);
     }
 
-    public synchronized void onRemoveNodes(long removedIn, Collection<Id> removed)
+    public synchronized void onRemoveNode(long removedIn, Id removed)
     {
         for (long epoch = removedIn, min = minEpoch(); epoch >= min; epoch--)
         {
             EpochState state = epochs.get(epoch);
             if (state == null || state.hasReachedQuorum()) continue;
-            for (Id node : removed)
-                epochs.syncComplete(node, epoch);
+            epochs.syncComplete(removed, epoch);
         }
     }
 

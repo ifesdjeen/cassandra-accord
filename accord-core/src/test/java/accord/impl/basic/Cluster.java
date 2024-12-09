@@ -428,8 +428,7 @@ public class Cluster
                                                             () -> queue,
                                                             (id, onStale) -> globalExecutor.withAgent(agentSupplier.apply(onStale)),
                                                             queue::checkFailures,
-                                                            ignore -> {
-                                                            },
+                                                            ignore -> {},
                                                             randomSupplier,
                                                             nowSupplier,
                                                             topologyFactory,
@@ -566,8 +565,8 @@ public class Cluster
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      nodeExecutor.agent(),
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
-                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck, journal), new CoordinationAdapter.DefaultFactory(),
-                                     DurableBefore.NOOP_PERSISTER, localConfig);
+                                     DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, isLoadedCheck), new CoordinationAdapter.DefaultFactory(),
+                                     DurableBefore.NOOP_PERSISTER, localConfig, journal);
                 DurabilityScheduling durability = node.durabilityScheduling();
                 // TODO (desired): randomise
                 durability.setShardCycleTime(30, SECONDS);
@@ -615,34 +614,37 @@ public class Cluster
 
             Scheduled restart = clusterScheduler.recurring(() -> {
                 Id id = random.pick(nodes);
-                CommandStore[] stores = nodeMap.get(id).commandStores().all();
-                ((DelayedCommandStore)stores[0]).unsafeRunIn(() -> {
-                    Predicate<Pending> pred = getPendingPredicate(id.id, stores);
-                    while (sinks.drain(pred));
 
-                    // Journal cleanup is a rough equivalent of a node restart.
-                    trace.debug("Triggering journal cleanup for node " + id);
-                    CommandsForKey.disableLinearizabilityViolationsReporting();
-                    ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
-                    NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
-                    listStore.clear();
-                    listStore.restoreFromSnapshot();
-                    // we are simulating node restart, so its remote listeners will also be gone
-                    ((DefaultRemoteListeners)nodeMap.get(id).remoteListeners()).clear();
-                    Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores);
-                    for (CommandStore s : stores)
-                    {
-                        DelayedCommandStores.DelayedCommandStore store = (DelayedCommandStores.DelayedCommandStore) s;
-                        store.clearForTesting();
-                    }
-                    Journal journal = journalMap.get(id);
-                    journal.replay(nodeMap.get(id).commandStores());
-                    while (sinks.drain(pred));
-                    CommandsForKey.enableLinearizabilityViolationsReporting();
-                    Invariants.checkState(listStore.equals(prevData));
-                    verifyConsistentRestore(beforeStores, stores);
-                    trace.debug("Done with cleanup.");
-                });
+                CommandStores stores = nodeMap.get(id).commandStores();
+                while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
+
+                trace.debug("Triggering store cleanup and journal replay for node " + id);
+                CommandsForKey.disableLinearizabilityViolationsReporting();
+
+                // Clean data and restore from snapshot
+                ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
+                NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
+                listStore.clear();
+                listStore.restoreFromSnapshot();
+
+                // We are simulating node restart, so its remote listeners will also be gone
+                ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
+                Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
+
+                // Re-create all command stores
+                nodeMap.get(id).commandStores().restoreShardStateUnsafe();
+                stores = nodeMap.get(id).commandStores();
+
+                // Replay journal
+                Journal journal = journalMap.get(id);
+                journal.replay(stores);
+
+                // Re-enable safety checks
+                while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
+                CommandsForKey.enableLinearizabilityViolationsReporting();
+                Invariants.checkState(listStore.equals(prevData));
+                verifyConsistentRestore(beforeStores, stores.all());
+                trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
             durabilityScheduling.forEach(DurabilityScheduling::start);

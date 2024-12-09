@@ -18,7 +18,6 @@
 
 package accord.api;
 
-import java.util.Collection;
 import javax.annotation.Nullable;
 
 import accord.local.Node;
@@ -157,7 +156,7 @@ public interface ConfigurationService
          */
         void onEpochRedundant(Ranges ranges, long epoch);
 
-        default void onRemoveNodes(long epoch, Collection<Node.Id> removed) {}
+        default void onRemoveNode(long epoch, Node.Id removed) {}
     }
 
     void registerListener(Listener listener);
