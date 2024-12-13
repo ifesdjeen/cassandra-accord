@@ -399,7 +399,7 @@ public class Commands
             }
             return;
         }
-        else if (command.saveStatus().isUninitialised() && !safeStore.rangesForEpoch().allAt(command.txnId().epoch()).intersects(scope))
+        else if (command.saveStatus().isUninitialised() && !safeStore.ranges().allAt(command.txnId().epoch()).intersects(scope))
             return; // don't bother propagating the invalidation to future epochs where the replica didn't already witness the command
 
         safeCommand.commitInvalidated(safeStore);
@@ -495,7 +495,7 @@ public class Commands
      */
     public static Ranges applyRanges(SafeCommandStore safeStore, Timestamp executeAt)
     {
-        return safeStore.rangesForEpoch().allAt(executeAt.epoch());
+        return safeStore.ranges().allAt(executeAt.epoch());
     }
 
     public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId)
@@ -1228,7 +1228,7 @@ public class Commands
         if (cur.participants() != participants)
         {
             upd = upd.mutable().setParticipants(participants);
-            Invariants.checkState(participants.touches == participants.owns || safeStore.rangesForEpoch().all().containsAll(participants.touches));
+            Invariants.checkState(participants.touches == participants.owns || safeStore.ranges().all().containsAll(participants.touches));
         }
 
         if (partialTxn != null && expectKnown.definition.isKnown())

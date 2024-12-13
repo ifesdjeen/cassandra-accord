@@ -236,7 +236,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxnId.epoch(), blockingTxn.slice(safeStore.rangesForEpoch().allAt(blockingTxnId), true), route);
+                    return Commands.preaccept(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, blockingTxnId.epoch(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId), true), route);
                 })));
 
             // Now create the transaction that should be blocked by the previous one
@@ -245,7 +245,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(AcceptOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(context, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
-                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txnId.epoch(), txn.slice(safeStore.rangesForEpoch().allAt(txnId.epoch()), true), route);
+                    return Commands.preaccept(safeStore, safeStore.get(txnId, participants), participants, txnId, txnId.epoch(), txn.slice(safeStore.ranges().allAt(txnId.epoch()), true), route);
                 })));
 
 
@@ -273,7 +273,7 @@ public class CoordinateTransactionTest
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, txnId.epoch(), txnId, txnId.epoch());
                     SafeCommand safeCommand = safeStore.get(txnId, participants);
                     Command command = safeCommand.current();
-                    PartialDeps.Builder depsBuilder = PartialDeps.builder(safeStore.rangesForEpoch().currentRanges());
+                    PartialDeps.Builder depsBuilder = PartialDeps.builder(safeStore.ranges().currentRanges());
                     depsBuilder.add(key, blockingTxnId);
                     PartialDeps partialDeps = depsBuilder.build();
                     Commands.commit(safeStore, safeCommand, participants, SaveStatus.Stable, Ballot.ZERO, txnId, route, command.partialTxn(), txnId, partialDeps);
@@ -292,7 +292,7 @@ public class CoordinateTransactionTest
             for (Node n : cluster)
                 assertEquals(ApplyOutcome.Success, getUninterruptibly(n.unsafeForKey(key).submit(blockingTxnContext, safeStore -> {
                     StoreParticipants participants = StoreParticipants.update(safeStore, route, blockingTxnId.epoch(), blockingTxnId, blockingTxnId.epoch());
-                    return Commands.apply(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, route, blockingTxnId, PartialDeps.builder(route).build(), blockingTxn.slice(safeStore.rangesForEpoch().allAt(blockingTxnId.epoch()), true), blockingTxn.execute(blockingTxnId, blockingTxnId, null), blockingTxn.query().compute(blockingTxnId, blockingTxnId, keys, null, null, null));
+                    return Commands.apply(safeStore, safeStore.get(blockingTxnId, participants), participants, blockingTxnId, route, blockingTxnId, PartialDeps.builder(route).build(), blockingTxn.slice(safeStore.ranges().allAt(blockingTxnId.epoch()), true), blockingTxn.execute(blockingTxnId, blockingTxnId, null), blockingTxn.query().compute(blockingTxnId, blockingTxnId, keys, null, null, null));
                 })));
             // Global sync should be unblocked
             syncPoint = getUninterruptibly(syncInclusiveSyncFuture);

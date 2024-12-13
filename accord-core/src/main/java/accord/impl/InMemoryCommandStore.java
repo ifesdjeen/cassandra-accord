@@ -190,7 +190,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     if (cur.saveStatus() == ReadyToExecute || cur.saveStatus() == Applying) // TODO (desired): only run the check once
                     {
                         long epoch = cur.executeAt().epoch();
-                        Ranges ranges = safeStore.rangesForEpoch().allAt(epoch);
+                        Ranges ranges = safeStore.ranges().allAt(epoch);
                         Participants<?> participants = cur.route().participants(ranges, Minimal);
                         // TODO (testing): look forwards also, but we only need to look at ?=ReadyToExecute transactions as they have already run their backwards checks
                         Iterator<GlobalCommand> iter = commandsByExecuteAt.descendingMap().tailMap(cur.executeAt(), false).values().iterator();
@@ -208,7 +208,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                             if (prevExecuteAt.epoch() < epoch)
                             {
                                 epoch = prevExecuteAt.epoch();
-                                ranges = ranges.slice(safeStore.rangesForEpoch().allAt(epoch), Minimal);
+                                ranges = ranges.slice(safeStore.ranges().allAt(epoch), Minimal);
                                 participants = participants.slice(ranges, Minimal);
                             }
 

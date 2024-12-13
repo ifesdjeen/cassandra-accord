@@ -1377,7 +1377,7 @@ public abstract class Command implements CommonAttributes
                 Update update = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps, deps.directKeyDeps);
                 if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
                 {
-                    CommandStores.RangesForEpoch rangesForEpoch = safeStore.rangesForEpoch();
+                    CommandStores.RangesForEpoch rangesForEpoch = safeStore.ranges();
                     long prevEpoch = Long.MAX_VALUE;
                     for (int i = rangesForEpoch.ranges.length - 1 ; i >= 0 ; --i)
                     {

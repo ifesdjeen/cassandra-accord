@@ -236,7 +236,7 @@ abstract class WaitingState extends BaseTxnState
     {
         EpochSupplier result = txnId;
         StoreParticipants participants = command.participants();
-        long newEpoch = safeStore.rangesForEpoch().latestEarlierEpochThatFullyCovers(txnId.epoch(), participants.hasTouched());
+        long newEpoch = safeStore.ranges().latestEarlierEpochThatFullyCovers(txnId.epoch(), participants.hasTouched());
         if (newEpoch < txnId.epoch())
             result = constant(newEpoch);
         return result;
@@ -245,7 +245,7 @@ abstract class WaitingState extends BaseTxnState
     private static EpochSupplier highEpoch(SafeCommandStore safeStore, TxnId txnId, BlockedUntil blockedUntil, Command command, Timestamp executeAt)
     {
         long epoch = blockedUntil.fetchEpoch(txnId, executeAt);
-        epoch = Math.max(epoch, safeStore.rangesForEpoch().earliestLaterEpochThatFullyCovers(epoch, command.participants().hasTouched()));
+        epoch = Math.max(epoch, safeStore.ranges().earliestLaterEpochThatFullyCovers(epoch, command.participants().hasTouched()));
         return constant(epoch);
     }
 
@@ -254,7 +254,7 @@ abstract class WaitingState extends BaseTxnState
         Timestamp executeAt = command.executeAtIfKnown();
         EpochSupplier toLocalEpoch = highEpoch(safeStore, txnId, blockedUntil, command, executeAt);
 
-        Ranges ranges = safeStore.rangesForEpoch().allBetween(txnId.epoch(), toLocalEpoch);
+        Ranges ranges = safeStore.ranges().allBetween(txnId.epoch(), toLocalEpoch);
         return command.route().slice(ranges);
     }
 

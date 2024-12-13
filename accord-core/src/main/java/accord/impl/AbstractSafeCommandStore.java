@@ -260,7 +260,7 @@ extends SafeCommandStore
     }
 
     @Override
-    public RangesForEpoch rangesForEpoch()
+    public RangesForEpoch ranges()
     {
         if (fieldUpdates != null && fieldUpdates.newRangesForEpoch != null)
             return fieldUpdates.newRangesForEpoch;

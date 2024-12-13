@@ -541,7 +541,7 @@ public abstract class CommandStore implements AgentExecutor
     // TODO (expected): we can immediately truncate dependencies locally once an exclusiveSyncPoint applies, we don't need to wait for the whole shard
     public void markShardDurable(SafeCommandStore safeStore, TxnId globalSyncId, Ranges durableRanges)
     {
-        final Ranges slicedRanges = durableRanges.slice(safeStore.rangesForEpoch().allUntil(globalSyncId.epoch()), Minimal);
+        final Ranges slicedRanges = durableRanges.slice(safeStore.ranges().allUntil(globalSyncId.epoch()), Minimal);
         TxnId locallyRedundantBefore = safeStore.redundantBefore().min(slicedRanges, e -> e.locallyAppliedOrInvalidatedBefore);
         RedundantBefore addShardRedundant = RedundantBefore.create(slicedRanges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, TxnId.NONE, globalSyncId, TxnId.NONE, TxnId.NONE);
         safeStore.upsertRedundantBefore(addShardRedundant);
@@ -620,11 +620,11 @@ public abstract class CommandStore implements AgentExecutor
         Timestamp staleUntilAtLeast = staleSince;
         if (isSincePrecise)
         {
-            ranges = ranges.slice(safeStore.rangesForEpoch().allAt(staleSince.epoch()), Minimal);
+            ranges = ranges.slice(safeStore.ranges().allAt(staleSince.epoch()), Minimal);
         }
         else
         {
-            ranges = ranges.slice(safeStore.rangesForEpoch().allSince(staleSince.epoch()), Minimal);
+            ranges = ranges.slice(safeStore.ranges().allSince(staleSince.epoch()), Minimal);
             // make sure no in-progress bootstrap attempts will override the stale since for commands whose staleness bounds are unknown
             staleUntilAtLeast = Timestamp.max(bootstrapBeganAt.lastKey(), staleUntilAtLeast);
         }

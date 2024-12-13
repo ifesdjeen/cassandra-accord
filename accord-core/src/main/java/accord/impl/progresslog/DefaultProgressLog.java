@@ -255,8 +255,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         if (after.hasBeen(PreApplied))
             return state;
 
-        Ranges executeRanges = after.hasBeen(PreCommitted) ? safeStore.rangesForEpoch().allAt(after.executeAt())
-                                                           : safeStore.rangesForEpoch().allSince(after.txnId().epoch());
+        Ranges executeRanges = after.hasBeen(PreCommitted) ? safeStore.ranges().allAt(after.executeAt())
+                                                           : safeStore.ranges().allSince(after.txnId().epoch());
         if (executeRanges.intersects(after.participants().owns()))
         {
             // this command should be ready to apply locally, so fetch it
@@ -330,7 +330,7 @@ public class DefaultProgressLog implements ProgressLog, Runnable
         // TODO (expected): we shouldn't rely on this anymore
         blockedBy.initialise();
         Invariants.checkState(blockedBy.current().saveStatus().compareTo(blockedUntil.minSaveStatus) < 0);
-        Invariants.checkState(blockedOnParticipants == null || safeStore.rangesForEpoch().all().containsAll(blockedOnParticipants)); // more permissive than strictly necessary, but just to cheaply catch errors
+        Invariants.checkState(blockedOnParticipants == null || safeStore.ranges().all().containsAll(blockedOnParticipants)); // more permissive than strictly necessary, but just to cheaply catch errors
 
         // first save the route/participant info into the Command if it isn't already there
         Command command = blockedBy.current();
@@ -346,8 +346,8 @@ public class DefaultProgressLog implements ProgressLog, Runnable
             command = blockedBy.updateAttributes(safeStore, update);
 
         // TODO (required): tighten up ExclusiveSyncPoint range bounds
-        Invariants.checkState((command.txnId().is(Txn.Kind.ExclusiveSyncPoint) ? safeStore.rangesForEpoch().all()
-                                                                               : safeStore.rangesForEpoch().allSince(command.txnId().epoch())
+        Invariants.checkState((command.txnId().is(Txn.Kind.ExclusiveSyncPoint) ? safeStore.ranges().all()
+                                                                               : safeStore.ranges().allSince(command.txnId().epoch())
                               ).intersects(command.participants().hasTouched()));
 
         // TODO (consider): consider triggering a preemption of existing coordinator (if any) in some circumstances;

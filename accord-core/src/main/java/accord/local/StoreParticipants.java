@@ -171,8 +171,8 @@ public class StoreParticipants
     public Ranges executeRanges(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt)
     {
         Ranges ranges = txnId.is(Txn.Kind.ExclusiveSyncPoint)
-                        ? safeStore.rangesForEpoch().all()
-                        : safeStore.rangesForEpoch().allAt(executeAt.epoch());
+                        ? safeStore.ranges().all()
+                        : safeStore.ranges().allAt(executeAt.epoch());
 
         return safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
     }
@@ -184,32 +184,32 @@ public class StoreParticipants
             return route;
 
         if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
-            return route.slice(safeStore.rangesForEpoch().all(), Minimal);
+            return route.slice(safeStore.ranges().all(), Minimal);
 
         if (txnId == executeAt || txnId.epoch() == executeAt.epoch())
             return owns;
 
-        return owns.slice(safeStore.rangesForEpoch().allAt(executeAt.epoch()), Minimal);
+        return owns.slice(safeStore.ranges().allAt(executeAt.epoch()), Minimal);
     }
 
     public static Route<?> touches(SafeCommandStore safeStore, TxnId txnId, EpochSupplier toEpoch, Route<?> route)
     {
         // TODO (required): remove pre-bootstrap?
         if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
-            return route.slice(safeStore.rangesForEpoch().all(), Minimal);
+            return route.slice(safeStore.ranges().all(), Minimal);
 
         if (txnId == toEpoch || txnId.epoch() == toEpoch.epoch())
             return route;
 
-        return route.slice(safeStore.rangesForEpoch().allBetween(txnId.epoch(), toEpoch), Minimal);
+        return route.slice(safeStore.ranges().allBetween(txnId.epoch(), toEpoch), Minimal);
     }
 
     public Participants<?> dependencyExecutesAtLeast(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, Timestamp executeAt)
     {
         if (txnId.is(Txn.Kind.ExclusiveSyncPoint))
-            return participants.slice(safeStore.rangesForEpoch().all(), Minimal);
+            return participants.slice(safeStore.ranges().all(), Minimal);
 
-        return participants.slice(safeStore.rangesForEpoch().allAt(executeAt.epoch()), Minimal);
+        return participants.slice(safeStore.ranges().allAt(executeAt.epoch()), Minimal);
     }
 
     @Override
@@ -231,7 +231,7 @@ public class StoreParticipants
 
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
     {
-        Participants<?> owns = participants.slice(safeStore.rangesForEpoch().allAt(txnId.epoch()), Minimal);
+        Participants<?> owns = participants.slice(safeStore.ranges().allAt(txnId.epoch()), Minimal);
         return new StoreParticipants(tryCastToRoute(participants), owns, owns, owns);
     }
 
@@ -248,16 +248,16 @@ public class StoreParticipants
 
     public static StoreParticipants execute(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long executeAtEpoch)
     {
-        Participants<?> owns = participants.slice(safeStore.rangesForEpoch().allBetween(txnId.epoch(), executeAtEpoch), Minimal);
-        Participants<?> touches = minEpoch >= txnId.epoch() ? owns :  participants.slice(safeStore.rangesForEpoch().allBetween(minEpoch, executeAtEpoch), Minimal);
+        Participants<?> owns = participants.slice(safeStore.ranges().allBetween(txnId.epoch(), executeAtEpoch), Minimal);
+        Participants<?> touches = minEpoch >= txnId.epoch() ? owns :  participants.slice(safeStore.ranges().allBetween(minEpoch, executeAtEpoch), Minimal);
         return new StoreParticipants(tryCastToRoute(participants), owns, touches, touches);
     }
 
     public static StoreParticipants read(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId, long minEpoch, long maxEpoch)
     {
         long txnIdEpoch = txnId.epoch();
-        Participants<?> owns = participants.slice(safeStore.rangesForEpoch().allAt(txnIdEpoch), Minimal);
-        Participants<?> touches = minEpoch == maxEpoch && minEpoch == txnIdEpoch ? owns : participants.slice(safeStore.rangesForEpoch().allBetween(minEpoch, maxEpoch), Minimal);
+        Participants<?> owns = participants.slice(safeStore.ranges().allAt(txnIdEpoch), Minimal);
+        Participants<?> touches = minEpoch == maxEpoch && minEpoch == txnIdEpoch ? owns : participants.slice(safeStore.ranges().allBetween(minEpoch, maxEpoch), Minimal);
         return new StoreParticipants(tryCastToRoute(participants), owns, touches, touches);
     }
 
@@ -268,7 +268,7 @@ public class StoreParticipants
 
     public static StoreParticipants update(SafeCommandStore safeStore, Participants<?> participants, long lowEpoch, TxnId txnId, long executeAtEpoch, long highEpoch)
     {
-        RangesForEpoch storeRanges = safeStore.rangesForEpoch();
+        RangesForEpoch storeRanges = safeStore.ranges();
         Ranges ownedRanges = storeRanges.allBetween(txnId.epoch(), executeAtEpoch);
         Participants<?> owns = participants.slice(ownedRanges, Minimal);
         Ranges touchesRanges = txnId.is(Txn.Kind.ExclusiveSyncPoint)
@@ -280,7 +280,7 @@ public class StoreParticipants
 
     public static StoreParticipants invalidate(SafeCommandStore safeStore, Participants<?> participants, TxnId txnId)
     {
-        RangesForEpoch storeRanges = safeStore.rangesForEpoch();
+        RangesForEpoch storeRanges = safeStore.ranges();
         Ranges ownedRanges = storeRanges.allAt(txnId.epoch());
         Ranges touchesRanges = storeRanges.all();
         Participants<?> owns = participants.slice(ownedRanges, Minimal);

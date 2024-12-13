@@ -160,7 +160,7 @@ public class ReadEphemeralTxnData extends ReadData
         if (executesAtLeast != null && executesAtLeast.epoch() > executeAtEpoch)
         {
             long executeAtLeastEpoch = executesAtLeast.epoch();
-            Ranges removed = safeStore.rangesForEpoch().removed(executeAtEpoch, executeAtLeastEpoch);
+            Ranges removed = safeStore.ranges().removed(executeAtEpoch, executeAtLeastEpoch);
             if (removed.intersects(command.route()))
                 return executeAtLeastEpoch;
         }
