@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 
 import accord.impl.InMemoryCommandStore.GlobalCommand;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.SafeCommand;
 import accord.primitives.TxnId;
 
@@ -67,7 +68,7 @@ public class InMemorySafeCommand extends SafeCommand implements SafeState<Comman
     public Command original()
     {
         touch();
-        if (!isModified())
+        if (original == INIT)
             return global.value();
         return (Command) original;
     }

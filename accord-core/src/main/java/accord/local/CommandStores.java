@@ -483,13 +483,6 @@ public abstract class CommandStores
         Topology newLocalTopology = newTopology.forNode(supplier.time.id()).trim();
         Ranges addedGlobal = newTopology.ranges().without(prev.global.ranges());
         node.addNewRangesToDurableBefore(addedGlobal, epoch);
-        if (!addedGlobal.isEmpty())
-        {
-            for (ShardHolder shard : prev.shards)
-            {
-                shard.store.epochUpdateHolder.updateGlobal(addedGlobal);
-            }
-        }
 
         Ranges added = newLocalTopology.ranges().without(prev.local.ranges());
         Ranges subtracted = prev.local.ranges().without(newLocalTopology.ranges());
@@ -534,7 +527,6 @@ public abstract class CommandStores
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
                 shard.ranges = new RangesForEpoch(epoch, addRanges);
                 shard.store.epochUpdateHolder.add(epoch, shard.ranges, addRanges);
-                shard.store.epochUpdateHolder.updateGlobal(newTopology.ranges());
 
                 Map<Boolean, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range));
                 if (partitioned.containsKey(false))
@@ -576,10 +568,7 @@ public abstract class CommandStores
         {
             Shard oldShard = oldShards.get(i);
             Shard newShard = newShards.get(i);
-            if (!oldShard.fastPathElectorate.containsAll(newShard.fastPathElectorate))
-                return true;
-
-            if (!newShard.fastPathElectorate.containsAll(oldShard.fastPathElectorate))
+            if (!oldShard.notInFastPath.equals(newShard.notInFastPath))
                 return true;
 
             if (!newShard.nodes.equals(oldShard.nodes))

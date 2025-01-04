@@ -39,6 +39,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.WrappableException;
 
 import static accord.coordinate.ReadCoordinator.Action.Aborted;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
@@ -98,7 +99,9 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             if (ok.futureEpoch > allTopologies.currentEpoch())
             {
                 // TODO (expected): only submit new requests for the keys that execute in a later epoch
-                new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch), route, txnId.withEpoch(ok.futureEpoch), txn, ok.futureEpoch, deps, callback).start();
+                node.withEpoch(ok.futureEpoch, callback, t -> WrappableException.wrap(t), () -> {
+                    new ExecuteEphemeralRead(node, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch), route, txnId.withEpoch(ok.futureEpoch), txn, ok.futureEpoch, deps, callback).start();
+                });
                 return Aborted;
             }
 
@@ -122,9 +125,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
                 // the replica may be missing the original commit, or the additional commit, so send everything
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 callback.accept(null, illegalState("Received Insufficient response to ephemeral read request"));
-                return Action.Aborted;
-            case Invalid:
-                callback.accept(null, illegalState("Submitted a read command to a replica that did not own the range"));
                 return Action.Aborted;
         }
     }
