@@ -55,8 +55,6 @@ import accord.utils.IndexedTriConsumer;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
 
-import javax.annotation.Nonnull;
-
 import com.google.common.annotations.VisibleForTesting;
 
 import static accord.local.Command.AbstractCommand.validate;
@@ -73,8 +71,6 @@ import static accord.primitives.Status.Durability.ShardUniversal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Stable;
-import static accord.primitives.Routable.Domain.Range;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.Paranoia.NONE;
 import static accord.utils.Invariants.ParanoiaCostFactor.LOW;
@@ -1533,7 +1529,7 @@ public abstract class Command implements CommonAttributes
                         ranges = safeStore.redundantBefore().removePreBootstrap(txnId, ranges);
                         if (!ranges.isEmpty())
                         {
-                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Minimal), update, (upd, idx) -> {
+                            deps.rangeDeps.forEach(participants.stillExecutes().slice(ranges, Slice.Minimal), update, (upd, idx) -> {
                                 TxnId id = upd.txnId(idx);
                                 // because we use RX as RedundantBefore bounds, we must not let an RX on a closing range
                                 // get ahead of one that isn't closed but has overlapping transactions (else we may erroneously treat as redundant)
