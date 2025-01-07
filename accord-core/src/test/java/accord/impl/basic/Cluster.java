@@ -746,7 +746,7 @@ public class Cluster
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
                 // Re-create all command stores
-                nodeMap.get(id).commandStores().restoreShardStateUnsafe();
+                nodeMap.get(id).commandStores().restoreShardStateUnsafe(t -> {});
                 stores = nodeMap.get(id).commandStores();
 
                 // Replay journal

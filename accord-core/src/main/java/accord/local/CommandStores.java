@@ -359,7 +359,7 @@ public abstract class CommandStores
 
     // This method should only be used on node startup.
     // "Unsafe" because it relies on user to synchronise and sequence the call properly.
-    public void restoreShardStateUnsafe()
+    public void restoreShardStateUnsafe(Consumer<Topology> reportTopology)
     {
         Journal.TopologyUpdate update;
         Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
@@ -367,19 +367,29 @@ public abstract class CommandStores
         if (!iter.hasNext())
             return;
 
-        update = iter.next();
-        ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
-        int i = 0;
-        for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+        boolean loadedShardState = false;
+        while (iter.hasNext())
         {
-            EpochUpdateHolder updateHolder = new EpochUpdateHolder();
-            CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
-            commandStore.restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-            shards[i++] = shard;
-        }
+            update = iter.next();
+            if (!loadedShardState)
+            {
+                ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
+                int i = 0;
+                for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+                {
+                    EpochUpdateHolder updateHolder = new EpochUpdateHolder();
+                    CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
+                    commandStore.restore();
+                    ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+                    shards[i++] = shard;
+                }
 
-        loadSnapshot(new Snapshot(shards, update.local, update.global));
+                loadSnapshot(new Snapshot(shards, update.local, update.global));
+                loadedShardState = true;
+            }
+
+            reportTopology.accept(update.global);
+        }
     }
 
     protected void loadSnapshot(Snapshot toLoad)
