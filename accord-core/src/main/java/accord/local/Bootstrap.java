@@ -24,6 +24,9 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.DataStore.FetchRanges;
@@ -78,6 +81,8 @@ import static accord.utils.Invariants.illegalState;
  */
 class Bootstrap
 {
+    private static final Logger logger = LoggerFactory.getLogger(Bootstrap.class);
+
     static class SafeToRead
     {
         final Ranges ranges;
@@ -140,14 +145,19 @@ class Bootstrap
             Ranges commitRanges = valid;
             safeStore = safeStore;
             // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
-            safeStore.commandStore().submit(empty(), safeStore0 -> {
-                store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
-                return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
-            }).flatMap(i -> i).flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(empty(), safeStore1 -> {
-                if (valid.isEmpty()) // we've lost ownership of the range
-                    return AsyncResults.success(Ranges.EMPTY);
-                return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
-            }))).flatMap(i -> i).begin(this);
+            safeStore.commandStore()
+                     .submit(empty(), safeStore0 -> {
+                         store.markBootstrapping(safeStore0, globalSyncId, commitRanges);
+                         return CoordinateSyncPoint.exclusiveSyncPoint(node, globalSyncId, commitRanges);
+                     })
+                     .flatMap(i -> i)
+                     .flatMap(syncPoint -> node.withEpoch(epoch, () -> store.submit(empty(), safeStore1 -> {
+                         if (valid.isEmpty()) // we've lost ownership of the range
+                             return AsyncResults.success(Ranges.EMPTY);
+                         return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
+                     })))
+                     .flatMap(i -> i)
+                     .begin(this);
         }
 
         // we no longer want to fetch these ranges (perhaps we no longer own them)
@@ -385,6 +395,8 @@ class Bootstrap
                     else fetchOutcome.addSuppressed(failure);
                 }
             }
+
+            if (failure != null) logger.error("Error during bootstrap ", failure);
             maybeComplete();
         }
 

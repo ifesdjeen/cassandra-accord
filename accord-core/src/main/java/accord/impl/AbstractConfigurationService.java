@@ -140,7 +140,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         synchronized EpochState getOrCreate(long epoch)
         {
-            Invariants.checkArgument(epoch > 0, "Epoch must be positive but given %d", epoch);
+            Invariants.checkArgument(epoch >= 0, "Epoch must be non-negative but given %d", epoch);
+            Invariants.checkArgument(epoch > 0 || (lastReceived == 0 && epochs.isEmpty()), "Received epoch 0 after initialization. Last received %d, epochsf; %s", lastReceived, epochs);
             if (epochs.isEmpty())
             {
                 EpochState state = createEpochState(epoch);
@@ -286,7 +287,20 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
             maxRequestedEpoch = epoch;
         }
-        fetchTopologyInternal(epoch);
+
+        try
+        {
+            fetchTopologyInternal(epoch);
+        }
+        catch (Throwable t)
+        {
+            // This epoch will not be fetched, so we need to reset it back
+            synchronized (this)
+            {
+                maxRequestedEpoch = 0;
+            }
+            throw t;
+        }
     }
 
     // TODO (expected): rename, sync is too ambiguous
@@ -312,7 +326,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
 
         if (lastReceived > 0 && topology.epoch() > lastReceived + 1)
         {
-            logger.warn("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
+            logger.debug("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
             fetchTopologyForEpoch(lastReceived + 1);
             epochs.receiveFuture(lastReceived + 1).addCallback(() -> reportTopology(topology, startSync, isLoad));
             return;
@@ -321,13 +335,14 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         long lastAcked = epochs.lastAcknowledged();
         if (lastAcked == 0 && lastReceived > 0)
         {
-            logger.warn("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch());
+            logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), epochs.minEpoch());
             epochs.acknowledgeFuture(epochs.minEpoch()).addCallback(() -> reportTopology(topology, startSync, isLoad));
             return;
         }
+
         if (lastAcked > 0 && topology.epoch() > lastAcked + 1)
         {
-            logger.warn("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);
+            logger.debug("Epoch {} received; waiting for {} to ack before reporting", topology.epoch(), lastAcked + 1);
             epochs.acknowledgeFuture(lastAcked + 1).addCallback(() -> reportTopology(topology, startSync, isLoad));
             return;
         }
