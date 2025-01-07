@@ -361,7 +361,7 @@ public class CommandChange
             this.result = newValue;
         }
 
-        public Command construct()
+        public Command construct(RedundantBefore redundantBefore)
         {
             if (!nextCalled)
                 return null;
@@ -372,6 +372,8 @@ public class CommandChange
                 attrs.partialTxn(partialTxn);
             if (durability != null)
                 attrs.durability(durability);
+            if (participants != null)
+                attrs.setParticipants(participants.filter(StoreParticipants.Filter.LOAD, redundantBefore, txnId, saveStatus.known.executeAt.isDecidedAndKnownToExecute() ? executeAt : null));
             if (participants != null)
                 attrs.setParticipants(participants);
             if (partialDeps != null &&
@@ -436,8 +438,9 @@ public class CommandChange
                         return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, executesAtLeast);
                     return Command.Truncated.truncatedApply(attrs, status, executeAt, writes, result, null);
                 case ErasedOrVestigial:
-                    return Command.Truncated.erasedOrInvalidOrVestigial(attrs.txnId(), attrs.durability(), attrs.participants());
+                    return Command.Truncated.erasedOrVestigial(attrs.txnId(), attrs.participants());
                 case Erased:
+                    // TODO (expected): why are we saving Durability here for erased commands?
                     return Command.Truncated.erased(attrs.txnId(), attrs.durability(), attrs.participants());
                 case Invalidated:
                     return Command.Truncated.invalidated(attrs.txnId());

@@ -102,8 +102,7 @@ public class InMemoryJournal implements Journal
         this.agent = agent;
     }
     @Override
-    public Command loadCommand(int commandStoreId, TxnId txnId,
-                               RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public Command loadCommand(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         NavigableMap<TxnId, List<Diff>> commandStore = this.diffsPerCommandStore.get(commandStoreId);
 
@@ -124,7 +123,7 @@ public class InMemoryJournal implements Journal
                 return ErasedSafeCommand.erased(txnId, ErasedOrVestigial);
         }
 
-        return builder.construct();
+        return builder.construct(redundantBefore);
     }
 
     @Override
@@ -276,7 +275,7 @@ public class InMemoryJournal implements Journal
                 if (builder.saveStatus().status == Truncated || builder.saveStatus().status == Invalidated)
                     continue; // Already truncated
 
-                Command command = builder.construct();
+                Command command = builder.construct(store.unsafeGetRedundantBefore());
                 Cleanup cleanup = Cleanup.shouldCleanup(store.agent(), command, store.unsafeGetRedundantBefore(), store.durableBefore());
                 switch (cleanup)
                 {
@@ -286,14 +285,14 @@ public class InMemoryJournal implements Journal
                     case TRUNCATE_WITH_OUTCOME:
                     case TRUNCATE:
                     case ERASE:
-                        command = Commands.purge(command, command.participants(), cleanup);
+                        command = Commands.purgeUnsafe(store, command, cleanup);
                         Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised);
                         Diff diff = toDiff(new CommandUpdate(null, command));
                         e2.setValue(cleanup == Cleanup.ERASE ? new ErasedList(diff) : new TruncatedList(diff));
                         break;
 
                     case EXPUNGE:
-                        e2.setValue(new PurgedList());
+                        e2.setValue(new PurgedList(e2.getValue()));
                         break;
                 }
             }
@@ -324,7 +323,7 @@ public class InMemoryJournal implements Journal
             for (Map.Entry<TxnId, List<Diff>> e : diffs.entrySet())
             {
                 if (e.getValue().isEmpty()) continue;
-                Command command = reconstruct(e.getValue(), ALL).construct();
+                Command command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
                 Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
                 loader.load(command, sync);
@@ -377,7 +376,11 @@ public class InMemoryJournal implements Journal
 
     private static class PurgedList extends AbstractList<Diff>
     {
-        PurgedList() {}
+        final List<Diff> purged;
+        PurgedList(List<Diff> purged)
+        {
+            this.purged = purged;
+        }
 
         @Override
         public Diff get(int index)
