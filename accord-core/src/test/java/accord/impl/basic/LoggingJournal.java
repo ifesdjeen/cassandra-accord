@@ -102,6 +102,8 @@ public class LoggingJournal implements Journal
     public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)
     {
         log("%d: %s\n", topologyUpdate);
+        if (onFlush != null)
+            onFlush.run();
         throw new IllegalArgumentException();
     }
 

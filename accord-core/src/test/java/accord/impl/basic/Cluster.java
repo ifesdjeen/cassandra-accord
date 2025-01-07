@@ -756,8 +756,9 @@ public class Cluster
                 // Re-enable safety checks
                 while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
                 CommandsForKey.enableLinearizabilityViolationsReporting();
-                Invariants.checkState(listStore.equals(prevData));
                 verifyConsistentRestore(beforeStores, stores.all());
+                // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
+                listStore.checkAtLeast(stores, prevData);
                 trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
