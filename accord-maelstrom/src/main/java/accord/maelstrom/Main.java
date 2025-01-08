@@ -180,7 +180,7 @@ public class Main
             topology = topologyFactory.toTopology(init.cluster);
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
             LocalConfig localConfig = LocalConfig.DEFAULT;
-            Journal journal = null; // TODO
+            Journal journal = new Cluster.NoOpJournal();
             on = new Node(init.self, sink, new SimpleConfigService(topology),
                           TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
