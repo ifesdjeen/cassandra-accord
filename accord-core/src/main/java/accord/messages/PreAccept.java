@@ -31,7 +31,6 @@ import accord.local.KeyHistory;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
