@@ -362,35 +362,33 @@ public abstract class CommandStores
     // "Unsafe" because it relies on user to synchronise and sequence the call properly.
     public void restoreShardStateUnsafe(Consumer<Topology> reportTopology)
     {
-        Journal.TopologyUpdate update;
         Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
         // First boot
         if (!iter.hasNext())
             return;
 
-        boolean loadedShardState = false;
+        Journal.TopologyUpdate lastUpdate = null;
+        Journal.TopologyUpdate update;
         while (iter.hasNext())
         {
             update = iter.next();
-            if (!loadedShardState)
-            {
-                ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
-                int i = 0;
-                for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
-                {
-                    EpochUpdateHolder updateHolder = new EpochUpdateHolder();
-                    CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
-                    commandStore.restore();
-                    ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-                    shards[i++] = shard;
-                }
-
-                loadSnapshot(new Snapshot(shards, update.local, update.global));
-                loadedShardState = true;
-            }
-
             reportTopology.accept(update.global);
+            if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
+                lastUpdate = update;
         }
+
+        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
+        int i = 0;
+        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
+        {
+            EpochUpdateHolder updateHolder = new EpochUpdateHolder();
+            CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
+            commandStore.restore();
+            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+            shards[i++] = shard;
+        }
+
+        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
     }
 
     protected void loadSnapshot(Snapshot toLoad)
