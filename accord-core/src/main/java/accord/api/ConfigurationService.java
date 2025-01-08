@@ -128,6 +128,8 @@ public interface ConfigurationService
          * the initial topology returned by `currentTopology` on startup.
          *
          * TODO (desired): document what this Future represents, or maybe refactor it away - only used for testing
+         *
+         *   * {@param isLoad} - whether current topology update is being loaded from the local node during startup
          */
         AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync);
 
