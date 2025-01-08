@@ -63,6 +63,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -763,7 +764,9 @@ public abstract class CommandStores
         //      and compact them into a single record. This can be done either in this patch or in a follow-up.
         if (update.snapshot != current)
         {
-            journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> {}); // TODO: durability
+            AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
+            journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> flush.setSuccess(null));
+            AsyncChains.getUnchecked(flush);
             current = update.snapshot;
         }
         return update.bootstrap;
