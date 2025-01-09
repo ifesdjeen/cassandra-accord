@@ -63,6 +63,7 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
@@ -764,8 +765,15 @@ public abstract class CommandStores
         {
             AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
             journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> flush.setSuccess(null));
-            AsyncChains.getUnchecked(flush);
             current = update.snapshot;
+            return () -> {
+                EpochReady ready = update.bootstrap.get();
+                return new EpochReady(ready.epoch,
+                                      flush.flatMap(ignore -> ready.metadata).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.coordinate).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.data).beginAsResult(),
+                                      flush.flatMap(ignore -> ready.reads).beginAsResult());
+            };
         }
         return update.bootstrap;
     }
