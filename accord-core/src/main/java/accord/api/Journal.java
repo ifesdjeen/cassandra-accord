@@ -20,6 +20,7 @@ package accord.api;
 
 import java.util.Iterator;
 import java.util.NavigableMap;
+import java.util.Objects;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -73,6 +74,22 @@ public interface Journal
             this.global = global;
         }
 
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            TopologyUpdate update = (TopologyUpdate) object;
+            return Objects.equals(commandStores, update.commandStores) && Objects.equals(local, update.local) && Objects.equals(global, update.global);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(commandStores, local, global);
+        }
+
+        @Override
         public String toString()
         {
             return "TopologyUpdate{" +
