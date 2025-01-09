@@ -63,7 +63,6 @@ import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
@@ -369,10 +368,9 @@ public abstract class CommandStores
             return;
 
         Journal.TopologyUpdate lastUpdate = null;
-        Journal.TopologyUpdate update;
         while (iter.hasNext())
         {
-            update = iter.next();
+            Journal.TopologyUpdate update = iter.next();
             reportTopology.accept(update.global);
             if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
                 lastUpdate = update;
