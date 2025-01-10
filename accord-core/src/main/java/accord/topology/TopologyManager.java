@@ -553,6 +553,7 @@ public class TopologyManager
         epochs.syncComplete(node, epoch);
     }
 
+    // TODO (now, correctness): it seems to be wrong to count removed nodes towards sync quorums.
     public synchronized void onRemoveNode(long removedIn, Id removed)
     {
         for (long epoch = removedIn, min = minEpoch(); epoch >= min; epoch--)
