@@ -24,9 +24,6 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.DataStore.FetchRanges;
@@ -81,8 +78,6 @@ import static accord.utils.Invariants.illegalState;
  */
 class Bootstrap
 {
-    private static final Logger logger = LoggerFactory.getLogger(Bootstrap.class);
-
     static class SafeToRead
     {
         final Ranges ranges;
@@ -396,7 +391,6 @@ class Bootstrap
                 }
             }
 
-            if (failure != null) logger.error("Error during bootstrap ", failure);
             maybeComplete();
         }
 
