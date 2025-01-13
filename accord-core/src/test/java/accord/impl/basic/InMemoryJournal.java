@@ -219,6 +219,18 @@ public class InMemoryJournal implements Journal
             onFlush.run();
     }
 
+    public void truncateTopologiesForTesting(long minEpoch)
+    {
+        List<TopologyUpdate> next = new ArrayList<>();
+        for (int i = 0; i < topologyUpdates.size(); i++)
+        {
+            TopologyUpdate update = topologyUpdates.get(i);
+            if (update.global.epoch() >= minEpoch)
+                next.add(update);
+        }
+        topologyUpdates.retainAll(next);
+    }
+
     @Override
     public RedundantBefore loadRedundantBefore(int commandStoreId)
     {
