@@ -178,8 +178,20 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             {
                 long epoch = topology.epoch();
                 logger.debug("Receiving epoch {}", epoch);
-                Invariants.checkState(lastReceived == epoch - 1 || epoch == 0 || lastReceived == 0,
-                                      "Epoch %d != %d + 1", epoch, lastReceived);
+                if (lastReceived >= epoch)
+                {
+                    // If we have already seen the epoch
+                    for (int i = epochs.size() - 1; i >= 0; i--)
+                    {
+                        EpochState expected = epochs.get(i);
+                        if (epoch == expected.epoch)
+                        {
+                            Invariants.checkState(topology.equals(expected.topology),
+                                                  "Expected existing topology to match upsert, but %s != %s", topology, expected.topology);
+                            return;
+                        }
+                    }
+                }
                 state = getOrCreate(epoch);
                 state.topology = topology;
                 lastReceived = epoch;
