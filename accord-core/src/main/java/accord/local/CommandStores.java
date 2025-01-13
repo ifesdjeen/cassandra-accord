@@ -376,18 +376,17 @@ public abstract class CommandStores
                 lastUpdate = update;
         }
 
-        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
-        int i = 0;
+        outer:
         for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
         {
-            EpochUpdateHolder updateHolder = new EpochUpdateHolder();
-            CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
-            commandStore.restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-            shards[i++] = shard;
+            for (ShardHolder shard : current.shards)
+            {
+                if (shard.ranges.equals(e.getValue()))
+                    continue outer;
+            }
+            Invariants.checkState(false, "Should have had %s among shards but did not: %s", e.getValue(), current.shards);
         }
 
-        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
     }
 
     protected void loadSnapshot(Snapshot toLoad)
