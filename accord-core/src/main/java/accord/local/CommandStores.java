@@ -380,9 +380,14 @@ public abstract class CommandStores
         int i = 0;
         for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
         {
-            EpochUpdateHolder updateHolder = new EpochUpdateHolder();
-            CommandStore commandStore = supplier.create(e.getKey(), updateHolder);
-            commandStore.restore();
+            RangesForEpoch ranges = e.getValue();
+            CommandStore commandStore = null;
+            for (ShardHolder shard : current.shards)
+            {
+                if (shard.ranges.equals(ranges))
+                    commandStore = shard.store;
+            }
+            Invariants.nonNull(commandStore, "Command store should have been reloaded").restore();
             ShardHolder shard = new ShardHolder(commandStore, e.getValue());
             shards[i++] = shard;
         }
