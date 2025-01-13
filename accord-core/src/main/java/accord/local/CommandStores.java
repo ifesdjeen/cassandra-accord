@@ -764,8 +764,7 @@ public abstract class CommandStores
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)
     {
         TopologyUpdate update = updateTopology(node, current, newTopology, startSync);
-        boolean allEmpty = update.snapshot.commandStores.isEmpty() && update.snapshot.global.isEmpty() && update.snapshot.local.isEmpty();
-        if (update.snapshot != current && !allEmpty)
+        if (update.snapshot != current)
         {
             AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
             journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> flush.setSuccess(null));
