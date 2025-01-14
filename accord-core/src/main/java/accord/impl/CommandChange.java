@@ -511,6 +511,8 @@ public class CommandChange
     public static int getFlags(Command before, Command after)
     {
         int flags = 0;
+        if (before == null && after == null)
+            return flags;
 
         flags = collectFlags(before, after, Command::executeAt, true, EXECUTE_AT, flags);
         flags = collectFlags(before, after, Command::executesAtLeast, true, EXECUTES_AT_LEAST, flags);
@@ -531,7 +533,7 @@ public class CommandChange
 
         // Special-cased for Journal BurnTest integration
         if ((before != null && after.result() != before.result()) ||
-            (before == null && after.result() != null)) //TODO
+            (before == null && after.result() != null))
         {
             flags = collectFlags(before, after, Command::writes, false, RESULT, flags);
         }
