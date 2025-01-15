@@ -61,6 +61,7 @@ import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 
 import static accord.api.Journal.CommandUpdate;
@@ -351,7 +352,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
                 Command before = safe.original();
                 Command after = safe.current();
-                commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> {});
+                AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
+                commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> flush.setSuccess(null));
+                AsyncChains.getUnchecked(flush);
                 commandStore.onRead(safe.current());
             });
             super.postExecute();
