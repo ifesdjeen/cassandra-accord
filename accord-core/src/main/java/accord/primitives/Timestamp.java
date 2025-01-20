@@ -64,7 +64,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
      * Today this is only the REJECTED_FLAG, but we may include additional flags in future (such as Committed, Applied..)
      * which we may also want to retain when merging in other contexts (such as in Deps).
      */
-    static final int MERGE_FLAGS = 0x0800;
+    public static final int MERGE_FLAGS = 0x0800;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
     public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
     public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
