@@ -916,7 +916,7 @@ public class Cluster
                 {
                     if (afterCommand.is(Status.Invalidated))
                         Invariants.checkState(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
-                                              && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
+                                                                                         && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
                     continue;
                 }
                 if (beforeCommand.hasBeen(Status.Truncated))
@@ -925,11 +925,16 @@ public class Cluster
                     Invariants.checkState(beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Truncated) || afterCommand.is(Status.Applied));
                     continue;
                 }
-                Invariants.checkState(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus())
-                    && beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId())
-                    && beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted())
-                    && beforeCommand.promised().equals(afterCommand.promised())
-                    && beforeCommand.durability().equals(afterCommand.durability()));
+                Invariants.checkState(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus()),
+                                      "%s != %s", beforeCommand.saveStatus(), afterCommand.saveStatus());
+                Invariants.checkState(beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId()),
+                                      "%s != %s", beforeCommand.executeAtOrTxnId(), afterCommand.executeAtOrTxnId());
+                Invariants.checkState(beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted()),
+                                      "%s != %s", beforeCommand.acceptedOrCommitted(), afterCommand.acceptedOrCommitted());
+                Invariants.checkState(beforeCommand.promised().equals(afterCommand.promised()),
+                                      "%s != %s", beforeCommand.promised(), afterCommand.promised());
+                Invariants.checkState(beforeCommand.durability().equals(afterCommand.durability()),
+                                      "%s != %s", beforeCommand.durability(), afterCommand.durability());
             }
 
             if (before.size() > store.unsafeCommands().size())
