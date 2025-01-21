@@ -52,13 +52,13 @@ import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
 import static accord.impl.CommandChange.Field.EXECUTE_AT;
 import static accord.impl.CommandChange.Field.FIELDS;
+import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.PARTIAL_DEPS;
 import static accord.impl.CommandChange.Field.PARTIAL_TXN;
 import static accord.impl.CommandChange.Field.PARTICIPANTS;
 import static accord.impl.CommandChange.Field.PROMISED;
 import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
-import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
@@ -75,6 +75,7 @@ import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.Status.Durability.NotDurable;
 
 public class CommandChange

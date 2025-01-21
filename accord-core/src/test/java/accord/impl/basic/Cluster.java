@@ -922,7 +922,7 @@ public class Cluster
                 {
                     if (afterCommand.is(Status.Invalidated))
                         Invariants.require(beforeCommand.hasBeen(Status.Truncated) || !beforeCommand.hasBeen(Status.PreCommitted)
-                                                                                      && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
+                                                                                         && store.unsafeGetRedundantBefore().max(beforeCommand.participants().touches(), RedundantBefore.Entry::shardRedundantBefore).compareTo(beforeCommand.txnId()) >= 0);
                     continue;
                 }
                 if (beforeCommand.hasBeen(Status.Truncated))
