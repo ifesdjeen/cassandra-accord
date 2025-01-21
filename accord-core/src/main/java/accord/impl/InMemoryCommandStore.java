@@ -36,6 +36,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -84,6 +85,7 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
@@ -93,7 +95,6 @@ import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.local.KeyHistory.SYNC;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Vestigial;
@@ -1148,47 +1149,23 @@ public abstract class InMemoryCommandStore extends CommandStore
             return txnId;
         }
 
-        @Override
-        public void load(Command command, Journal.OnDone onDone)
+        public void load(Command command)
         {
-            try
-            {
-                commandStore.executeInContext(commandStore,
-                                              context(command, ASYNC),
-                                              safeStore -> loadInternal(command, safeStore));
-            }
-            catch (Throwable t)
-            {
-                onDone.failure(t);
-            }
-
-            onDone.success();
+            commandStore.executeInContext(commandStore,
+                                          context(command, ASYNC),
+                                          safeStore -> loadInternal(command, safeStore));
         }
 
-        @Override
-        public void apply(Command command, Journal.OnDone onDone)
+        public void apply(Command command)
         {
-            try
-            {
-                PreLoadContext context = context(command, SYNC);
-                commandStore.unsafeRunIn(() -> {
-                    commandStore.executeInContext(commandStore,
-                                                  context,
-                                                  safeStore -> {
-                                                      applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
-                                                          unsafeApplyWrites(safeStore, safeCommand, cmd);
-                                                      });
-                                                      return null;
-                                                  });
-                });
-            }
-            catch (Throwable t)
-            {
-                onDone.failure(t);
-                return;
-            }
-
-            onDone.success();
+            commandStore.executeInContext(commandStore,
+                                          context(command, SYNC),
+                                          safeStore -> {
+                                              applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
+                                                  unsafeApplyWrites(safeStore, safeCommand, cmd);
+                                              });
+                                              return null;
+                                          });
         }
 
         protected void unsafeApplyWrites(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
@@ -1201,6 +1178,26 @@ public abstract class InMemoryCommandStore extends CommandStore
                 safeCommand.applied(safeStore);
                 safeStore.notifyListeners(safeCommand, command);
             }
+        }
+
+        public AsyncChain<Void> load(TxnId txnId, Supplier<Command> supplier)
+        {
+            Command command;
+            // TODO (required): consider this race condition some more:
+            //      - can we avoid double-applying?
+            //      - is this definitely safe?
+            if (commandStore.hasCommand(txnId))
+            {
+                command = commandStore.command(txnId).value();
+            }
+            else
+            {
+                command = supplier.get();
+                load(command);
+            }
+
+            apply(command);
+            return AsyncResults.success(null);
         }
     }
 

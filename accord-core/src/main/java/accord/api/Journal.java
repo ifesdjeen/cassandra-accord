@@ -21,6 +21,7 @@ package accord.api;
 import java.util.Iterator;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.function.Supplier;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -33,6 +34,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.PersistentField.Persister;
+import accord.utils.async.AsyncChain;
 import org.agrona.collections.Int2ObjectHashMap;
 
 /**
@@ -145,8 +147,7 @@ public interface Journal
      */
     interface Loader
     {
-        void load(Command next, OnDone onDone);
-        void apply(Command next, OnDone onDone);
+        AsyncChain<Void> load(TxnId txnId, Supplier<Command> supplier);
     }
 
 
