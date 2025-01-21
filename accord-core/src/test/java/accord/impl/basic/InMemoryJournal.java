@@ -55,10 +55,12 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.PersistentField;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.Load.ALL;
-import static accord.impl.CommandChange.*;
+import static accord.impl.CommandChange.Field;
 import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
@@ -71,12 +73,23 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.impl.CommandChange.WaitingOnProvider;
+import static accord.impl.CommandChange.anyFieldChanged;
+import static accord.impl.CommandChange.getFieldChanged;
+import static accord.impl.CommandChange.getFieldIsNull;
+import static accord.impl.CommandChange.getFlags;
+import static accord.impl.CommandChange.getWaitingOn;
+import static accord.impl.CommandChange.nextSetField;
+import static accord.impl.CommandChange.setFieldChanged;
+import static accord.impl.CommandChange.setFieldIsNull;
+import static accord.impl.CommandChange.toIterableSetFields;
+import static accord.impl.CommandChange.unsetFieldIsNull;
+import static accord.impl.CommandChange.unsetIterableFields;
+import static accord.impl.CommandChange.validateFlags;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.ErasedOrVestigial;
-import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
-import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 
 public class InMemoryJournal implements Journal
@@ -359,23 +372,14 @@ public class InMemoryJournal implements Journal
             {
                 if (e.getValue().isEmpty()) continue;
 
-                // TODO (required): consider this race condition some more:
-                //      - can we avoid double-applying?
-                //      - is this definitely safe?
-                Command command;
-                if (!commandStore.hasCommand(e.getKey()))
-                {
-                    command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
-                    Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
-                                          "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
-                    loader.load(command, sync);
-                }
-                else
-                {
-                    command = commandStore.command(e.getKey()).value();
-                }
-                if (command.txnId().is(Write) && command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
-                    loader.apply(command, sync);
+                AsyncResult<Void> res = loader.load(e.getKey(),
+                                                   () -> {
+                                                        Command command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
+                                                        Invariants.checkState(command.saveStatus() != SaveStatus.Uninitialised,
+                                                                              "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
+                                                        return command;
+                                                    }).beginAsResult();
+                AsyncChains.getUnchecked(res);
             }
         }
     }

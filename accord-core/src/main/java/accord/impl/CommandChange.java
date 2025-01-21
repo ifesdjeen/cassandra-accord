@@ -59,6 +59,7 @@ import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.TRUNCATE_WITH_OUTCOME;
 import static accord.local.StoreParticipants.Filter.LOAD;
+import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.Status.Durability.NotDurable;
 
 public class CommandChange
@@ -414,6 +415,8 @@ public class CommandChange
                 case TruncatedApplyWithOutcome:
                 case TruncatedApplyWithDeps:
                 case TruncatedApply:
+                    if (status != TruncatedApplyWithOutcome)
+                        result = null;
                     return Command.Truncated.truncatedApply(txnId, status, durability, participants, executeAt, writes, result, executesAtLeast);
                 case ErasedOrVestigial:
                     return Command.Truncated.erasedOrVestigial(txnId, participants);
