@@ -123,7 +123,8 @@ public abstract class CommandStore implements AgentExecutor
                             DataStore store,
                             ProgressLog.Factory progressLogFactory,
                             LocalListeners.Factory listenersFactory,
-                            EpochUpdateHolder rangesForEpoch);
+                            EpochUpdateHolder rangesForEpoch,
+                            Journal journal);
     }
 
     private static final ThreadLocal<CommandStore> CURRENT_STORE = new ThreadLocal<>();

@@ -26,14 +26,15 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 
 import static accord.local.Cleanup.Input.FULL;
-import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
+import static accord.primitives.Txn.Kind.Write;
 
 public abstract class AbstractLoader implements Journal.Loader
 {
@@ -58,7 +59,7 @@ public abstract class AbstractLoader implements Journal.Loader
         return safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
     }
 
-    protected void applyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
+    protected void maybeApplyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
         Command command = safeCommand.current();
@@ -66,7 +67,7 @@ public abstract class AbstractLoader implements Journal.Loader
         {
             Commands.maybeExecute(safeStore, safeCommand, command, true, true);
         }
-        else if (command.saveStatus().compareTo(Applying) >= 0 && !command.hasBeen(Truncated))
+        else if (command.txnId().is(Write) && command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && !command.hasBeen(Truncated))
         {
             apply.accept(safeCommand, command);
         }

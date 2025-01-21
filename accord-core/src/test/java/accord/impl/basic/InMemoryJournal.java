@@ -33,8 +33,8 @@ import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Result;
 import accord.impl.CommandChange;
-import accord.impl.RetiredSafeCommand;
 import accord.impl.InMemoryCommandStore;
+import accord.impl.RetiredSafeCommand;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.Command.WaitingOnWithExecuteAt;
@@ -57,10 +57,12 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
 import accord.utils.PersistentField;
+import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.Load.ALL;
-import static accord.impl.CommandChange.*;
+import static accord.impl.CommandChange.Field;
 import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
@@ -74,13 +76,23 @@ import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
+import static accord.impl.CommandChange.WaitingOnProvider;
+import static accord.impl.CommandChange.anyFieldChanged;
+import static accord.impl.CommandChange.getFlags;
+import static accord.impl.CommandChange.isChanged;
+import static accord.impl.CommandChange.isNull;
+import static accord.impl.CommandChange.nextSetField;
+import static accord.impl.CommandChange.setChanged;
+import static accord.impl.CommandChange.setFieldIsNull;
+import static accord.impl.CommandChange.toIterableSetFields;
+import static accord.impl.CommandChange.unsetFieldIsNull;
+import static accord.impl.CommandChange.unsetIterable;
+import static accord.impl.CommandChange.validateFlags;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Vestigial;
-import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Invalidated;
 import static accord.primitives.Status.Truncated;
-import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 
 public class InMemoryJournal implements Journal
@@ -340,11 +352,6 @@ public class InMemoryJournal implements Journal
     @Override
     public void replay(CommandStores commandStores)
     {
-        OnDone sync = new OnDone() {
-            public void success() {}
-            public void failure(Throwable t) { throw new RuntimeException("Caught an exception during replay", t); }
-        };
-
         for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> diffEntry : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = diffEntry.getKey();
@@ -362,23 +369,8 @@ public class InMemoryJournal implements Journal
             {
                 if (e.getValue().isEmpty()) continue;
 
-                // TODO (required): consider this race condition some more:
-                //      - can we avoid double-applying?
-                //      - is this definitely safe?
-                Command command;
-                if (!commandStore.hasCommand(e.getKey()))
-                {
-                    command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
-                    Invariants.require(command.saveStatus() != SaveStatus.Uninitialised,
-                                       "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
-                    loader.load(command, sync);
-                }
-                else
-                {
-                    command = commandStore.command(e.getKey()).value();
-                }
-                if (command.txnId().is(Write) && command.saveStatus().compareTo(Stable) >= 0 && !command.hasBeen(Truncated))
-                    loader.apply(command, sync);
+                AsyncResult<Command> res = loader.load(e.getKey()).beginAsResult();
+                AsyncChains.getUnchecked(res);
             }
         }
     }

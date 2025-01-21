@@ -33,6 +33,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.PersistentField.Persister;
+import accord.utils.async.AsyncChain;
 import org.agrona.collections.Int2ObjectHashMap;
 
 /**
@@ -145,8 +146,7 @@ public interface Journal
      */
     interface Loader
     {
-        void load(Command next, OnDone onDone);
-        void apply(Command next, OnDone onDone);
+        AsyncChain<Command> load(TxnId txnId);
     }
 
 
