@@ -1701,7 +1701,7 @@ public abstract class Command implements ICommand
                 case Erased:
                 case WasApply:
                     Invariants.checkState(writes == null, "Writes exist for %s", validate);
-                    Invariants.checkState(result == null, "Results exist %s", validate);
+                    Invariants.checkState(result == null, "Results exist %s %s", validate, result);
                     break;
             }
         }
