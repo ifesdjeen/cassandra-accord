@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -36,12 +35,12 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.cfk.CommandsForKey.InternalStatus;
-import accord.local.cfk.PostProcess.LoadPruned;
-import accord.primitives.Deps.DepList;
-import accord.primitives.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.PostProcess.LoadPruned;
 import accord.primitives.Ballot;
+import accord.primitives.Deps.DepList;
 import accord.primitives.RoutingKeys;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -57,8 +56,8 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
-import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
+import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER_DEPS_ONLY;
@@ -72,6 +71,7 @@ import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.validateMissing;
 import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -787,6 +787,10 @@ class Updating
         Invariants.requireArgument(mode == UPDATE || update == null);
         if (safeCommand.current().hasBeen(Status.Truncated))
             return cfk;
+
+        Command orig = safeCommand.current();
+        if (orig.saveStatus() == Uninitialised && orig.txnId().is(EphemeralRead))
+                return cfk;
 
         Command.Committed command = safeCommand.current().asCommitted();
         TxnId waitingTxnId = command.txnId();
