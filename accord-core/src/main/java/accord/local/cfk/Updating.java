@@ -73,6 +73,7 @@ import static accord.local.cfk.Utils.removePrunedAdditions;
 import static accord.local.cfk.Utils.removeUnmanaged;
 import static accord.local.cfk.Utils.validateMissing;
 import static accord.primitives.Routable.Domain.Range;
+import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
@@ -785,6 +786,10 @@ class Updating
         boolean register = mode != UPDATE;
         Invariants.requireArgument(mode == UPDATE || update == null);
         if (safeCommand.current().hasBeen(Status.Truncated))
+            return cfk;
+
+        Command orig = safeCommand.current();
+        if (orig.saveStatus() == Uninitialised && orig.txnId().is(EphemeralRead))
             return cfk;
 
         Command.Committed command = safeCommand.current().asCommitted();
