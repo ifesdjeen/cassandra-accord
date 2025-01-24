@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -36,12 +35,13 @@ import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.cfk.CommandsForKey.InternalStatus;
-import accord.local.cfk.PostProcess.LoadPruned;
-import accord.primitives.Deps.DepList;
-import accord.primitives.Status;
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.PostProcess.LoadPruned;
 import accord.primitives.Ballot;
+import accord.primitives.Deps.DepList;
 import accord.primitives.RoutingKeys;
+import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -57,8 +57,8 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.TRANSITIVE_VISIBLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.COMMIT;
-import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.CommandsForKey.mayExecute;
+import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.Pruning.loadingPrunedFor;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER_DEPS_ONLY;
@@ -788,7 +788,13 @@ class Updating
         if (safeCommand.current().hasBeen(Status.Truncated))
             return cfk;
 
-        Command.Committed command = safeCommand.current().asCommitted();
+        Command orig = safeCommand.current();
+        if (orig.saveStatus() == SaveStatus.Uninitialised)
+        {
+            if (orig.txnId().kind() == EphemeralRead)
+                return cfk;
+        }
+        Command.Committed command = orig.asCommitted();
         TxnId waitingTxnId = command.txnId();
         // used only to decide if an executeAt is included _on the assumption the TxnId is_. For ?[EX] this is all timestamps
         Timestamp compareExecuteAt = waitingTxnId.awaitsOnlyDeps() ? Timestamp.MAX : command.executeAt();
