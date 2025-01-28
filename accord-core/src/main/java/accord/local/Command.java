@@ -45,6 +45,7 @@ import accord.primitives.Status;
 import accord.primitives.Status.Durability;
 import accord.primitives.Status.Phase;
 import accord.primitives.Timestamp;
+import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -1709,8 +1710,8 @@ public abstract class Command implements ICommand
                 case ApplyAtKnown:
                 case ExecuteAtProposed:
                     Invariants.checkState(executeAt != null);
-                    int c =  executeAt.compareTo(validate.txnId());
-                    Invariants.checkState(c > 0 || (c == 0 && executeAt.getClass() == TxnId.class));
+                    int c = executeAt.compareTo(validate.txnId());
+                    Invariants.checkState(c > 0 || (c == 0 && executeAt.getClass() == TxnId.class) || (executeAt.getClass() == TimestampWithUniqueHlc.class));
                     break;
                 case NoExecuteAt:
                     Invariants.checkState(executeAt.equals(Timestamp.NONE));
