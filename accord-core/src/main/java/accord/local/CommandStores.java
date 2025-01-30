@@ -366,32 +366,18 @@ public abstract class CommandStores
         if (!iter.hasNext())
             return;
 
-        Journal.TopologyUpdate lastUpdate = null;
+        Journal.TopologyUpdate prev = null;
         while (iter.hasNext())
         {
             Journal.TopologyUpdate update = iter.next();
             reportTopology.accept(update.global);
-            if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
-                lastUpdate = update;
+            Invariants.require(prev == null || update.global.epoch() == prev.global.epoch() + 1,
+                               "Non consecutive epoch during replay %d while %d expected", prev == null ? -1 : prev.global.epoch(), update.global.epoch());
+            prev = update;
         }
 
-        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
-        int i = 0;
-        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
-        {
-            RangesForEpoch ranges = e.getValue();
-            CommandStore commandStore = null;
-            for (ShardHolder shard : current.shards)
-            {
-                if (shard.ranges.equals(ranges))
-                    commandStore = shard.store;
-            }
-            Invariants.nonNull(commandStore, "Command store should have been reloaded").restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-            shards[i++] = shard;
-        }
-
-        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
+        for (ShardHolder shard : current.shards)
+            shard.store.restore();
     }
 
     protected void loadSnapshot(Snapshot toLoad)
