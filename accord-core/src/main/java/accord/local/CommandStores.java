@@ -396,24 +396,6 @@ public abstract class CommandStores
             if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
                 lastUpdate = update;
         }
-
-        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
-        int i = 0;
-        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
-        {
-            RangesForEpoch ranges = e.getValue();
-            CommandStore commandStore = null;
-            for (ShardHolder shard : current.shards)
-            {
-                if (shard.ranges.equals(ranges))
-                    commandStore = shard.store;
-            }
-            Invariants.nonNull(commandStore, "Command store should have been reloaded").restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-            shards[i++] = shard;
-        }
-
-        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
     }
 
     protected void loadSnapshot(Snapshot toLoad)
