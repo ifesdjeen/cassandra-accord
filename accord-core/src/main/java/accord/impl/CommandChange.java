@@ -75,7 +75,6 @@ import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
-import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.Status.Durability.NotDurable;
 
 public class CommandChange

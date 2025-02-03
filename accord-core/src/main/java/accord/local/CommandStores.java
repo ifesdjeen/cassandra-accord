@@ -103,8 +103,9 @@ public abstract class CommandStores
         private final LocalListeners.Factory listenersFactory;
         private final CommandStore.Factory shardFactory;
         private final RandomSource random;
+        private final Journal journal;
 
-        StoreSupplier(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory)
+        StoreSupplier(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory, Journal journal)
         {
             this.time = time;
             this.agent = agent;
@@ -113,11 +114,12 @@ public abstract class CommandStores
             this.progressLogFactory = progressLogFactory;
             this.listenersFactory = listenersFactory;
             this.shardFactory = shardFactory;
+            this.journal = journal;
         }
 
         CommandStore create(int id, EpochUpdateHolder rangesForEpoch)
         {
-            return shardFactory.create(id, time, agent, this.store, progressLogFactory, listenersFactory, rangesForEpoch);
+            return shardFactory.create(id, time, agent, this.store, progressLogFactory, listenersFactory, rangesForEpoch, journal);
         }
     }
 
@@ -468,7 +470,7 @@ public abstract class CommandStores
     public CommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, Journal journal, ShardDistributor shardDistributor,
                          ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, CommandStore.Factory shardFactory)
     {
-        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory), shardDistributor, journal);
+        this(new StoreSupplier(time, agent, store, random, progressLogFactory, listenersFactory, shardFactory, journal), shardDistributor, journal);
     }
 
     public Topology local()

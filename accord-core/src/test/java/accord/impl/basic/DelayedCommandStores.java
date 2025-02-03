@@ -73,7 +73,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
     private DelayedCommandStores(NodeCommandStoreService time, Agent agent, DataStore store, RandomSource random, ShardDistributor shardDistributor, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, SimulatedDelayedExecutorService executorService, CacheLoading isLoadedCheck, Journal journal)
     {
-        super(time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck, journal));
+        super(time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory, DelayedCommandStore.factory(executorService, isLoadedCheck));
     }
 
     public static CommandStores.Factory factory(PendingQueue pending, CacheLoading isLoadedCheck)
@@ -178,7 +178,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         public DelayedCommandStore(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, SimulatedDelayedExecutorService executor, CacheLoading cacheLoading, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
+            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
             this.executor = executor;
             this.cacheLoading = cacheLoading;
             this.journal = journal;
@@ -255,9 +255,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             return !cacheLoading.cacheEmpty();
         }
 
-        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, CacheLoading isLoadedCheck, Journal journal)
+        private static CommandStore.Factory factory(SimulatedDelayedExecutorService executor, CacheLoading isLoadedCheck)
         {
-            return (id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch) -> new DelayedCommandStore(id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch, executor, isLoadedCheck, journal);
+            return (id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch, journal) -> new DelayedCommandStore(id, node, agent, store, progressLogFactory, listenersFactory, rangesForEpoch, executor, isLoadedCheck, journal);
         }
 
         @Override

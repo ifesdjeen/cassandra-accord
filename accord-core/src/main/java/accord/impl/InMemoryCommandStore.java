@@ -36,7 +36,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -91,15 +90,16 @@ import org.agrona.collections.ObjectHashSet;
 
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.KeyHistory.ASYNC;
+import static accord.local.KeyHistory.SYNC;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.Erased;
-import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.SaveStatus.NotDefined;
 import static accord.primitives.SaveStatus.ReadyToExecute;
+import static accord.primitives.SaveStatus.Vestigial;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability.NotDurable;
@@ -125,12 +125,12 @@ public abstract class InMemoryCommandStore extends CommandStore
     protected Timestamp maxRedundant = Timestamp.NONE;
 
     private InMemorySafeStore current;
-    private final Journal.Loader loader;
+    private final Journal journal;
 
-    public InMemoryCommandStore(int id, NodeCommandStoreService node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
+    public InMemoryCommandStore(int id, NodeCommandStoreService node, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, Journal journal)
     {
         super(id, node, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
-        this.loader = new CommandLoader(this);
+        this.journal = journal;
     }
 
     protected boolean canExposeUnloaded()
@@ -817,9 +817,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         Runnable active = null;
         final Queue<Runnable> queue = new ConcurrentLinkedQueue<>();
 
-        public Synchronized(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
+        public Synchronized(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
+            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
         }
 
         private synchronized void maybeRun()
@@ -910,9 +910,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         private Thread thread; // when run in the executor this will be non-null, null implies not running in this store
         private final ExecutorService executor;
 
-        public SingleThread(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
+        public SingleThread(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
+            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
             this.executor = Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r);
                 thread.setName(CommandStore.class.getSimpleName() + '[' + time.id() + ']');
@@ -993,9 +993,9 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
 
-        public Debug(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder)
+        public Debug(int id, NodeCommandStoreService time, Agent agent, DataStore store, ProgressLog.Factory progressLogFactory, LocalListeners.Factory listenersFactory, EpochUpdateHolder epochUpdateHolder, Journal journal)
         {
-            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
+            super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
         }
 
         @Override
@@ -1121,7 +1121,7 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     public Journal.Loader loader()
     {
-        return loader;
+        return new CommandLoader(this);
     }
 
     private static class CommandLoader extends AbstractLoader
@@ -1180,7 +1180,8 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
         }
 
-        public AsyncChain<Void> load(TxnId txnId, Supplier<Command> supplier)
+        @Override
+        public AsyncChain<Void> load(TxnId txnId)
         {
             Command command;
             // TODO (required): consider this race condition some more:
@@ -1192,7 +1193,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             }
             else
             {
-                command = supplier.get();
+                command = commandStore.journal.loadCommand(commandStore.id, txnId, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
                 load(command);
             }
 

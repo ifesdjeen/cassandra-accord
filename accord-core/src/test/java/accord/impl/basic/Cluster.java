@@ -595,7 +595,7 @@ public class Cluster
                     List<ReflectionUtils.Difference<?>> diff = ReflectionUtils.recursiveEquals(command, reconstructed);
                     if (!diff.isEmpty() && command.saveStatus().compareTo(SaveStatus.Erased) >= 0)
                         diff.removeIf(v -> v.path.equals(".participants."));
-                    Invariants.require(diff.isEmpty(), "Commands did not match: expected %s, given %s on s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
+                    Invariants.require(diff.isEmpty(), "Commands did not match: expected %s, given %s on %s, diff %s", command, reconstructed, commandStore, new LazyToString(() -> String.join("\n", Iterables.transform(diff, Object::toString))));
                 }
 
                 @Override
