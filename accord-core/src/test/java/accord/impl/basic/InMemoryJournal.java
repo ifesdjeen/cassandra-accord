@@ -352,11 +352,6 @@ public class InMemoryJournal implements Journal
     @Override
     public void replay(CommandStores commandStores)
     {
-        OnDone sync = new OnDone() {
-            public void success() {}
-            public void failure(Throwable t) { throw new RuntimeException("Caught an exception during replay", t); }
-        };
-
         for (Map.Entry<Integer, NavigableMap<TxnId, List<Diff>>> diffEntry : diffsPerCommandStore.entrySet())
         {
             int commandStoreId = diffEntry.getKey();
@@ -374,13 +369,7 @@ public class InMemoryJournal implements Journal
             {
                 if (e.getValue().isEmpty()) continue;
 
-                AsyncResult<Void> res = loader.load(e.getKey(),
-                                                   () -> {
-                                                        Command command = reconstruct(e.getValue(), ALL).construct(commandStore.unsafeGetRedundantBefore());
-                                                        Invariants.require(command.saveStatus() != SaveStatus.Uninitialised,
-                                                                           "Found uninitialized command in the log: %s %s", diffEntry.getKey(), e.getValue());
-                                                        return command;
-                                                    }).beginAsResult();
+                AsyncResult<Void> res = loader.load(e.getKey()).beginAsResult();
                 AsyncChains.getUnchecked(res);
             }
         }

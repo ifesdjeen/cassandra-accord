@@ -21,7 +21,6 @@ package accord.api;
 import java.util.Iterator;
 import java.util.NavigableMap;
 import java.util.Objects;
-import java.util.function.Supplier;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -147,7 +146,7 @@ public interface Journal
      */
     interface Loader
     {
-        AsyncChain<Void> load(TxnId txnId, Supplier<Command> supplier);
+        AsyncChain<Void> load(TxnId txnId);
     }
 
 
