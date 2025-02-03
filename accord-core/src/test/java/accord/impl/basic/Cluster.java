@@ -762,12 +762,20 @@ public class Cluster
                 ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
-                // Re-create all command stores
-                nodeMap.get(id).commandStores().restoreShardStateUnsafe(t -> {});
-                stores = nodeMap.get(id).commandStores();
-
-                // Replay journal
                 Journal journal = journalMap.get(id);
+                Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
+                Journal.TopologyUpdate lastUpdate = null;
+                while (iter.hasNext())
+                {
+                    Journal.TopologyUpdate update = iter.next();
+                    Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
+                    lastUpdate = update;
+                }
+
+                if (lastUpdate != null)
+                    ((DelayedCommandStores) nodeMap.get(id).commandStores()).validateShardStateForTesting(lastUpdate);
+
+                stores = nodeMap.get(id).commandStores();
                 journal.replay(stores);
 
                 // Re-enable safety checks
