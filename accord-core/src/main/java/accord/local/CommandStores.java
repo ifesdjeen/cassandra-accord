@@ -20,7 +20,6 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -133,7 +132,7 @@ public abstract class CommandStores
             this.store = store;
         }
 
-        private ShardHolder(CommandStore store, RangesForEpoch ranges)
+        public ShardHolder(CommandStore store, RangesForEpoch ranges)
         {
             this.store = store;
             this.ranges = ranges;
@@ -144,7 +143,7 @@ public abstract class CommandStores
             return new ShardHolder(store, ranges);
         }
 
-        RangesForEpoch ranges()
+        public RangesForEpoch ranges()
         {
             return ranges;
         }
@@ -381,43 +380,6 @@ public abstract class CommandStores
         }
     }
 
-    // This method should only be used on node startup.
-    // "Unsafe" because it relies on user to synchronise and sequence the call properly.
-    public void restoreShardStateUnsafe(Consumer<Topology> reportTopology)
-    {
-        Iterator<Journal.TopologyUpdate> iter = journal.replayTopologies();
-        // First boot
-        if (!iter.hasNext())
-            return;
-
-        Journal.TopologyUpdate lastUpdate = null;
-        while (iter.hasNext())
-        {
-            Journal.TopologyUpdate update = iter.next();
-            reportTopology.accept(update.global);
-            if (lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch())
-                lastUpdate = update;
-        }
-
-        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
-        int i = 0;
-        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
-        {
-            RangesForEpoch ranges = e.getValue();
-            CommandStore commandStore = null;
-            for (ShardHolder shard : current.shards)
-            {
-                if (shard.ranges.equals(ranges))
-                    commandStore = shard.store;
-            }
-            Invariants.nonNull(commandStore, "Command store should have been reloaded").restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
-            shards[i++] = shard;
-        }
-
-        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
-    }
-
     protected void loadSnapshot(Snapshot toLoad)
     {
         current = toLoad;
@@ -428,7 +390,7 @@ public abstract class CommandStores
         public final ShardHolder[] shards;
         public final Int2ObjectHashMap<CommandStore> byId;
 
-        Snapshot(ShardHolder[] shards, Topology local, Topology global)
+        public Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
             super(asMap(shards), local, global);
             this.shards = shards;
@@ -769,6 +731,20 @@ public abstract class CommandStores
             chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
+    }
+
+    /**
+     * Initialize topology from snapshot on boot.
+     */
+    public synchronized void initializeTopologyUnsafe(Journal.TopologyUpdate update)
+    {
+        Invariants.require(current.global.epoch() == 0);
+        ShardHolder[] shards = new ShardHolder[update.commandStores.size()];
+        int i = 0;
+        for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+            shards[i++] = new ShardHolder(supplier.create(e.getKey(), new EpochUpdateHolder()), e.getValue());
+
+        loadSnapshot(new Snapshot(shards, update.local, update.global));
     }
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)

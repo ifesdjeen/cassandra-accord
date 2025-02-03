@@ -19,6 +19,7 @@
 package accord.impl.basic;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +92,30 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         int prefix = ((PrefixedIntHashKey) range.start()).prefix;
         // we see new prefix when a new prefix is added, so avoid bootstrap in these cases
         return contains(previous, prefix);
+    }
+
+    public void validateShardStateForTesting(Journal.TopologyUpdate lastUpdate)
+    {
+        ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
+        int i = 0;
+        for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
+        {
+            Snapshot current = current();
+            RangesForEpoch ranges = e.getValue();
+            CommandStore commandStore = null;
+            for (ShardHolder shard : current.shards)
+            {
+                if (shard.ranges().equals(ranges))
+                    commandStore = shard.store;
+            }
+            Invariants.nonNull(commandStore, "Each set of ranges should have a corresponding command store, but %d did not:(%s)",
+                               ranges, Arrays.toString(shards))
+                      .restore();
+            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+            shards[i++] = shard;
+        }
+
+        loadSnapshot(new Snapshot(shards, lastUpdate.local, lastUpdate.global));
     }
 
     protected void loadSnapshot(Snapshot nextSnapshot)
