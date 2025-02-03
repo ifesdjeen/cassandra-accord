@@ -47,7 +47,7 @@ public interface Journal
     // TODO (required): use OnDone instead of Runnable
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
-    Iterator<TopologyUpdate> replayTopologies(); // reverse iterator
+    Iterator<TopologyUpdate> replayTopologies();
     void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush);
 
     void purge(CommandStores commandStores);
