@@ -74,6 +74,7 @@ import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.DefaultTimeouts;
 import accord.impl.DurabilityScheduling;
+import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStore.GlobalCommand;
 import accord.impl.MessageListener;
 import accord.impl.PrefixedIntHashKey;
@@ -762,6 +763,10 @@ public class Cluster
                 ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
+                for (CommandStore store : stores.all())
+                {
+                    ((InMemoryCommandStore) store).clearForTesting();
+                }
                 // Re-create all command stores
                 nodeMap.get(id).commandStores().restoreShardStateUnsafe(t -> {});
                 stores = nodeMap.get(id).commandStores();
@@ -773,7 +778,7 @@ public class Cluster
                 // Re-enable safety checks
                 while (sinks.drain(getPendingPredicate(id.id, stores.all()))) ;
                 CommandsForKey.enableLinearizabilityViolationsReporting();
-                verifyConsistentRestore(beforeStores, stores.all());
+                verifyConsistentRestore(journal, beforeStores, stores.all());
                 // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
                 listStore.checkAtLeast(stores, prevData);
                 trace.debug("Done with replay.");
@@ -837,12 +842,12 @@ public class Cluster
 
         void cancel()
         {
-            scheduled.cancel();
+//            scheduled.cancel();
         }
 
         private void schedule(Scheduler clusterScheduler, RandomSource rs, List<Id> nodes, Map<Id, Node> nodeMap, Map<Id, Journal> journalMap)
         {
-            scheduled = clusterScheduler.selfRecurring(() -> run(clusterScheduler, rs, nodes, nodeMap, journalMap), rs.nextInt(1, 30), SECONDS);
+//            scheduled = clusterScheduler.selfRecurring(() -> run(clusterScheduler, rs, nodes, nodeMap, journalMap), rs.nextInt(1, 30), SECONDS);
         }
 
         private void run(Scheduler clusterScheduler, RandomSource rs, List<Id> nodes, Map<Id, Node> nodeMap, Map<Id, Journal> journalMap)
@@ -898,7 +903,7 @@ public class Cluster
         return null;
     }
 
-    private static void verifyConsistentRestore(Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores, CommandStore[] stores)
+    private static void verifyConsistentRestore(Journal journal, Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores, CommandStore[] stores)
     {
         for (CommandStore s : stores)
         {
@@ -926,11 +931,20 @@ public class Cluster
                     Invariants.require(beforeCommand.is(Status.Invalidated) || afterCommand.is(Status.Truncated) || afterCommand.is(Status.Applied));
                     continue;
                 }
-                Invariants.require(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus())
-                                   && beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId())
-                                   && beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted())
-                                   && beforeCommand.promised().equals(afterCommand.promised())
-                                   && beforeCommand.durability().equals(afterCommand.durability()));
+                Invariants.require(isConsistent(beforeCommand.saveStatus(), afterCommand.saveStatus()),
+                                   "%s != %s", beforeCommand.saveStatus(), afterCommand.saveStatus());
+                Invariants.require(beforeCommand.executeAtOrTxnId().equals(afterCommand.executeAtOrTxnId()),
+                                   "%s != %s", beforeCommand.executeAtOrTxnId(), afterCommand.executeAtOrTxnId());
+                if (!beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted()))
+                {
+//                    journal.loadCommand(store.id(), afterCommand.txnId(), RedundantBefore.EMPTY, DurableBefore.EMPTY);
+                    Invariants.require(beforeCommand.acceptedOrCommitted().equals(afterCommand.acceptedOrCommitted()),
+                                       "%s != %s\n%s\n%s", beforeCommand.acceptedOrCommitted(), afterCommand.acceptedOrCommitted(), beforeCommand, afterCommand);
+                }
+                Invariants.require(beforeCommand.promised().equals(afterCommand.promised()),
+                                   "%s != %s", beforeCommand.promised(), afterCommand.promised());
+                Invariants.require(beforeCommand.durability().equals(afterCommand.durability()),
+                                   "%s != %s", beforeCommand.durability(), afterCommand.durability());
             }
 
             if (before.size() > store.unsafeCommands().size())

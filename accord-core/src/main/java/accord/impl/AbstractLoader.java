@@ -66,7 +66,7 @@ public abstract class AbstractLoader implements Journal.Loader
         {
             Commands.maybeExecute(safeStore, safeCommand, command, true, true);
         }
-        else if (command.saveStatus().compareTo(Applying) >= 0 && !command.hasBeen(Truncated))
+        else if (command.txnId().kind().isWrite() && command.saveStatus().compareTo(Applying) >= 0 && !command.hasBeen(Truncated))
         {
             apply.accept(safeCommand, command);
         }
