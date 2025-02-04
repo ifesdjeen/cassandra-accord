@@ -183,6 +183,7 @@ public abstract class Command implements ICommand
                && saveStatus() == command.saveStatus()
                && durability() == command.durability()
                && Objects.equals(participants(), command.participants())
+               && Objects.equals(acceptedOrCommitted(), command.acceptedOrCommitted())
                && Objects.equals(promised(), command.promised());
     }
 
