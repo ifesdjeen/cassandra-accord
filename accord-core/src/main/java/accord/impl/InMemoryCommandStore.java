@@ -84,7 +84,6 @@ import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
@@ -1149,26 +1148,26 @@ public abstract class InMemoryCommandStore extends CommandStore
             return txnId;
         }
 
-        public void load(Command command)
+        private AsyncChain<Command> load(Command command)
         {
-            commandStore.executeInContext(commandStore,
-                                          context(command, ASYNC),
-                                          safeStore -> loadInternal(command, safeStore));
+            return AsyncChains.success(commandStore.executeInContext(commandStore,
+                                                                     context(command, ASYNC),
+                                                                     (SafeCommandStore safeStore) -> loadInternal(command, safeStore)));
         }
 
-        public void apply(Command command)
+        private AsyncChain<Command> apply(Command command)
         {
-            commandStore.executeInContext(commandStore,
-                                          context(command, SYNC),
-                                          safeStore -> {
-                                              applyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
-                                                  unsafeApplyWrites(safeStore, safeCommand, cmd);
-                                              });
-                                              return null;
-                                          });
+            return AsyncChains.success(commandStore.executeInContext(commandStore,
+                                                                     context(command, SYNC),
+                                                                     (SafeCommandStore safeStore) -> {
+                                                                         maybeApplyWrites(command.txnId(), safeStore, (safeCommand, cmd) -> {
+                                                                             unsafeApplyWrites(safeStore, safeCommand, cmd);
+                                                                         });
+                                                                         return command;
+                                                                     }));
         }
 
-        protected void unsafeApplyWrites(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
+        private void unsafeApplyWrites(SafeCommandStore safeStore, SafeCommand safeCommand, Command command)
         {
             Command.Executed executed = command.asExecuted();
             Participants<?> executes = executed.participants().stillExecutes();
@@ -1181,24 +1180,16 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> load(TxnId txnId)
+        public AsyncChain<Command> load(TxnId txnId)
         {
-            Command command;
             // TODO (required): consider this race condition some more:
             //      - can we avoid double-applying?
             //      - is this definitely safe?
             if (commandStore.hasCommand(txnId))
-            {
-                command = commandStore.command(txnId).value();
-            }
-            else
-            {
-                command = commandStore.journal.loadCommand(commandStore.id, txnId, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
-                load(command);
-            }
+                return apply(commandStore.command(txnId).value());
 
-            apply(command);
-            return AsyncResults.success(null);
+            Command command = commandStore.journal.loadCommand(commandStore.id, txnId, commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+            return load(command).flatMap(this::apply);
         }
     }
 

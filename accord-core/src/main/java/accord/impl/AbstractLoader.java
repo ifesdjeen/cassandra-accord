@@ -59,7 +59,7 @@ public abstract class AbstractLoader implements Journal.Loader
         return safeStore.unsafeGetNoCleanup(txnId).update(safeStore, command);
     }
 
-    protected void applyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
+    protected void maybeApplyWrites(TxnId txnId, SafeCommandStore safeStore, BiConsumer<SafeCommand, Command> apply)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
         Command command = safeCommand.current();

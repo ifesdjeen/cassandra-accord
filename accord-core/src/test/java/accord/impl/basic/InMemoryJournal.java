@@ -369,7 +369,7 @@ public class InMemoryJournal implements Journal
             {
                 if (e.getValue().isEmpty()) continue;
 
-                AsyncResult<Void> res = loader.load(e.getKey()).beginAsResult();
+                AsyncResult<Command> res = loader.load(e.getKey()).beginAsResult();
                 AsyncChains.getUnchecked(res);
             }
         }
