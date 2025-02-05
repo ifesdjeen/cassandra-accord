@@ -83,9 +83,8 @@ import static accord.impl.CommandChange.isChanged;
 import static accord.impl.CommandChange.isNull;
 import static accord.impl.CommandChange.nextSetField;
 import static accord.impl.CommandChange.setChanged;
-import static accord.impl.CommandChange.setFieldIsNull;
+import static accord.impl.CommandChange.setFieldIsNullAndChanged;
 import static accord.impl.CommandChange.toIterableSetFields;
-import static accord.impl.CommandChange.unsetFieldIsNull;
 import static accord.impl.CommandChange.unsetIterable;
 import static accord.impl.CommandChange.validateFlags;
 import static accord.local.Cleanup.Input.FULL;
@@ -172,10 +171,10 @@ public class InMemoryJournal implements Journal
         if (saved == null)
             return null;
 
-        // TODO (expected): match C* and visit in reverse order
         Builder builder = null;
-        for (Diff diff : saved)
+        for (int i = saved.size() - 1; i >= 0; i--)
         {
+            Diff diff = saved.get(i);
             if (builder == null)
                 builder = new Builder(diff.txnId, load);
             builder.apply(diff);
@@ -560,67 +559,25 @@ public class InMemoryJournal implements Journal
             {
                 Field field = nextSetField(iterable);
 
-                this.flags = setChanged(field, this.flags);
+                // Since we are iterating in reverse order, we skip the fields that were
+                // set by entries writer later (i.e. already read ones).
+                if (isChanged(field, this.flags) || isNull(field, mask))
+                {
+                    iterable = unsetIterable(field, iterable);
+                    continue;
+                }
+
                 if (isNull(field, diff.flags))
                 {
-                    this.flags = setFieldIsNull(field, this.flags);
-                    setNull(field);
+                    this.flags = setFieldIsNullAndChanged(field, this.flags);
                 }
                 else
                 {
-                    this.flags = unsetFieldIsNull(field, this.flags);
+                    this.flags = setChanged(field, this.flags);
                     deserialize(diff, field);
                 }
 
                 iterable = unsetIterable(field, iterable);
-            }
-        }
-
-        private void setNull(Field field)
-        {
-            switch (field)
-            {
-                case EXECUTE_AT:
-                    executeAt = null;
-                    break;
-                case EXECUTES_AT_LEAST:
-                    executeAtLeast = null;
-                    break;
-                case MIN_UNIQUE_HLC:
-                    minUniqueHlc = 0;
-                    break;
-                case SAVE_STATUS:
-                    saveStatus = null;
-                    break;
-                case DURABILITY:
-                    durability = null;
-                    break;
-                case ACCEPTED:
-                    acceptedOrCommitted = null;
-                    break;
-                case PROMISED:
-                    promised = null;
-                    break;
-                case PARTICIPANTS:
-                    participants = null;
-                    break;
-                case PARTIAL_TXN:
-                    partialTxn = null;
-                    break;
-                case PARTIAL_DEPS:
-                    partialDeps = null;
-                    break;
-                case WAITING_ON:
-                    waitingOn = null;
-                    break;
-                case WRITES:
-                    writes = null;
-                    break;
-                case RESULT:
-                    result = null;
-                    break;
-                case CLEANUP:
-                    throw new IllegalStateException();
             }
         }
 

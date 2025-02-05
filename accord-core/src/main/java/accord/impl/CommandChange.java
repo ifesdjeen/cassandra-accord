@@ -20,6 +20,7 @@ package accord.impl;
 
 import java.util.function.BiPredicate;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -52,13 +53,13 @@ import static accord.impl.CommandChange.Field.DURABILITY;
 import static accord.impl.CommandChange.Field.EXECUTES_AT_LEAST;
 import static accord.impl.CommandChange.Field.EXECUTE_AT;
 import static accord.impl.CommandChange.Field.FIELDS;
+import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.PARTIAL_DEPS;
 import static accord.impl.CommandChange.Field.PARTIAL_TXN;
 import static accord.impl.CommandChange.Field.PARTICIPANTS;
 import static accord.impl.CommandChange.Field.PROMISED;
 import static accord.impl.CommandChange.Field.RESULT;
 import static accord.impl.CommandChange.Field.SAVE_STATUS;
-import static accord.impl.CommandChange.Field.MIN_UNIQUE_HLC;
 import static accord.impl.CommandChange.Field.WAITING_ON;
 import static accord.impl.CommandChange.Field.WRITES;
 import static accord.local.Cleanup.NO;
@@ -74,7 +75,11 @@ import static accord.local.Command.Truncated.erased;
 import static accord.local.Command.Truncated.invalidated;
 import static accord.local.Command.Truncated.vestigial;
 import static accord.local.StoreParticipants.Filter.LOAD;
+import static accord.primitives.Known.Definition.DefinitionErased;
+import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
+import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
+import static accord.primitives.Known.Outcome.WasApply;
 import static accord.primitives.Status.Durability.NotDurable;
 
 public class CommandChange
@@ -99,6 +104,37 @@ public class CommandChange
         ;
 
         public static final Field[] FIELDS = values();
+    }
+
+    /**
+     * SaveStatus.Known contains information about erased / nullified fields,
+     * which we can use in order to mark the corresponding fields as changed
+     * and setting them to null when they are erased.
+     */
+    public static int[] saveStatusMasks;
+
+    static
+    {
+        saveStatusMasks = new int[SaveStatus.values().length];
+        for (int i = 0; i < saveStatusMasks.length; i++)
+        {
+            SaveStatus saveStatus = SaveStatus.forOrdinal(i);
+            int mask = 0;
+            if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, DepsErased))
+                mask |= setFieldIsNullAndChanged(PARTIAL_DEPS, mask);
+            if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, ExecuteAtErased))
+                mask |= setFieldIsNullAndChanged(EXECUTE_AT, mask);
+            if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, DefinitionErased))
+                mask |= setFieldIsNullAndChanged(PARTIAL_TXN, mask);
+            if (forceFieldChangedToNullFlag(saveStatus, saveStatus.known::is, WasApply))
+                mask |= setFieldIsNullAndChanged(RESULT, mask);
+            saveStatusMasks[i] = mask;
+        }
+    }
+
+    private static <T> boolean forceFieldChangedToNullFlag(SaveStatus saveStatus, Predicate<T> predicate, T erased)
+    {
+        return saveStatus == SaveStatus.Vestigial || predicate.test(erased);
     }
 
     public static class Builder
@@ -151,70 +187,14 @@ public class CommandChange
             this(ALL);
         }
 
-        public TxnId txnId()
-        {
-            return txnId;
-        }
-
-        public Timestamp executeAt()
-        {
-            return executeAt;
-        }
-
-        // TODO: why is this unused in BurnTest
-        public Timestamp executeAtLeast()
-        {
-            return executeAtLeast;
-        }
-
         public SaveStatus saveStatus()
         {
             return saveStatus;
         }
 
-        public Status.Durability durability()
-        {
-            return durability;
-        }
-
-        public Ballot acceptedOrCommitted()
-        {
-            return acceptedOrCommitted;
-        }
-
-        public Ballot promised()
-        {
-            return promised;
-        }
-
         public StoreParticipants participants()
         {
             return participants;
-        }
-
-        public PartialTxn partialTxn()
-        {
-            return partialTxn;
-        }
-
-        public PartialDeps partialDeps()
-        {
-            return partialDeps;
-        }
-
-        public CommandChange.WaitingOnProvider waitingOn()
-        {
-            return waitingOn;
-        }
-
-        public Writes writes()
-        {
-            return writes;
-        }
-
-        public Result result()
-        {
-            return result;
         }
 
         public void clear()
@@ -286,7 +266,7 @@ public class CommandChange
 
         public Builder maybeCleanup(Cleanup cleanup)
         {
-            if (saveStatus() == null)
+            if (saveStatus == null)
                 return this;
 
             switch (cleanup)
@@ -531,6 +511,10 @@ public class CommandChange
             flags = setChanged(PARTICIPANTS, flags);
             flags = setChanged(SAVE_STATUS, flags);
         }
+
+        if (after.saveStatus() != null)
+            flags |= saveStatusMasks[after.saveStatus().ordinal()];
+
         return flags;
     }
 
