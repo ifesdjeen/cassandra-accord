@@ -34,6 +34,9 @@ import javax.annotation.concurrent.GuardedBy;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
@@ -88,6 +91,7 @@ import static accord.utils.Invariants.nonNull;
 public class TopologyManager
 {
     private static final FutureEpoch SUCCESS;
+    private static final Logger logger = LoggerFactory.getLogger(TopologyManager.class);
 
     static
     {
@@ -250,6 +254,11 @@ public class TopologyManager
             this.currentEpoch = epochs.length > 0 ? epochs[0].epoch() : 0;
             this.pending = pending;
             this.futureEpochs = futureEpochs;
+            if (!futureEpochs.isEmpty())
+                Invariants.require(futureEpochs.get(0).epoch == currentEpoch + 1);
+
+            for (int i = 1; i < futureEpochs.size(); i++)
+                Invariants.requireArgument(futureEpochs.get(i).epoch == futureEpochs.get(i - 1).epoch - 1);
             for (int i=1; i<epochs.length; i++)
                 Invariants.requireArgument(epochs[i].epoch() == epochs[i - 1].epoch() - 1);
             this.epochs = epochs;
@@ -619,7 +628,6 @@ public class TopologyManager
     public synchronized EpochReady onTopologyUpdate(Topology topology, Supplier<EpochReady> bootstrap)
     {
         Epochs current = epochs;
-
         Invariants.requireArgument(topology.epoch == current.nextEpoch() || epochs == Epochs.EMPTY,
                                    "Expected topology update %d to be %d", topology.epoch, current.nextEpoch());
         EpochState[] nextEpochs = new EpochState[current.epochs.length + 1];
@@ -1071,12 +1079,18 @@ public class TopologyManager
 
     public boolean hasEpoch(long epoch)
     {
-        return epochs.get(epoch) != null;
+        synchronized (this)
+        {
+            return epochs.get(epoch) != null;
+        }
     }
 
     public boolean hasAtLeastEpoch(long epoch)
     {
-        return epochs.currentEpoch >= epoch;
+        synchronized (this)
+        {
+            return epochs.currentEpoch >= epoch;
+        }
     }
 
     public Topology localForEpoch(long epoch)

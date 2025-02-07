@@ -21,7 +21,6 @@ package accord.impl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-
 import javax.annotation.concurrent.GuardedBy;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -285,35 +284,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         return epochs.topologyFor(epoch);
     }
 
-    protected abstract void fetchTopologyInternal(long epoch);
-
-    @GuardedBy("this")
-    private long maxRequestedEpoch;
     @Override
-    public void fetchTopologyForEpoch(long epoch)
-    {
-        synchronized (this)
-        {
-            if (epoch <= maxRequestedEpoch)
-                return;
-
-            maxRequestedEpoch = epoch;
-        }
-
-        try
-        {
-            fetchTopologyInternal(epoch);
-        }
-        catch (Throwable t)
-        {
-            // This epoch will not be fetched, so we need to reset it back
-            synchronized (this)
-            {
-                maxRequestedEpoch = 0;
-            }
-            throw t;
-        }
-    }
+    public abstract void fetchTopologyForEpoch(long epoch);
 
     // TODO (expected): rename, sync is too ambiguous
     protected abstract void localSyncComplete(Topology topology, boolean startSync);
@@ -339,8 +311,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         if (lastReceived > 0 && topology.epoch() > lastReceived + 1)
         {
             logger.debug("Epoch {} received; waiting to receive {} before reporting", topology.epoch(), lastReceived + 1);
-            fetchTopologyForEpoch(lastReceived + 1);
             epochs.receiveFuture(lastReceived + 1).addCallback(() -> reportTopology(topology, isLoad, startSync));
+            fetchTopologyForEpoch(lastReceived + 1);
             return;
         }
 
@@ -404,13 +376,17 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         epochs.truncateUntil(epoch);
     }
 
+    // synchronized because state.reads is written
     public AsyncChain<Void> epochReady(long epoch)
     {
-        EpochState state = epochs.getOrCreate(epoch);
-        if (state.reads != null)
-            return state.reads;
+        synchronized (this)
+        {
+            EpochState state = epochs.getOrCreate(epoch);
+            if (state.reads != null)
+                return state.reads;
 
-        return state.acknowledged.flatMap(r -> state.reads);
+            return state.acknowledged.flatMap(r -> state.reads);
+        }
     }
 
     public abstract static class Minimal extends AbstractConfigurationService<Minimal.EpochState, Minimal.EpochHistory>

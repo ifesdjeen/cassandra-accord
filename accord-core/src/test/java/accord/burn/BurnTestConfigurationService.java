@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import javax.annotation.concurrent.GuardedBy;
 
 import accord.api.TestableConfigurationService;
 import accord.impl.AbstractConfigurationService;
@@ -165,9 +166,19 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
         else node.scheduler().selfRecurring(() -> super.reportTopology(topology, isLoad, startSync), 0, TimeUnit.MILLISECONDS);
     }
 
-    @Override
-    protected void fetchTopologyInternal(long epoch)
+    @GuardedBy("this")
+    private long maxRequestedEpoch;
+
+    public void fetchTopologyForEpoch(long epoch)
     {
+        synchronized (this)
+        {
+            if (epoch <= maxRequestedEpoch)
+                return;
+
+            maxRequestedEpoch = epoch;
+        }
+
         pendingEpochs.computeIfAbsent(epoch, FetchTopology::new);
     }
 

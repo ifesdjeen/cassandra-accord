@@ -96,8 +96,8 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
-import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
+import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
 import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.TxnId.Cardinality.Any;
@@ -402,8 +402,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            configService.fetchTopologyForEpoch(epoch);
             topology.awaitEpoch(epoch).begin(callback);
+            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
@@ -415,11 +415,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            configService.fetchTopologyForEpoch(epoch);
             topology.awaitEpoch(epoch).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, fail);
                 else ifSuccess.run();
             });
+            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
@@ -431,11 +431,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
-            configService.fetchTopologyForEpoch(epoch);
             topology.awaitEpoch(epoch).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
                 else ifSuccess.run();
             });
+            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
@@ -448,8 +448,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         }
         else
         {
+            AsyncChain<T> res = topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
             configService.fetchTopologyForEpoch(epoch);
-            return topology.awaitEpoch(epoch).flatMap(ignore -> supplier.get());
+            return res;
         }
     }
 

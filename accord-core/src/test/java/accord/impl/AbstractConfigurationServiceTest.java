@@ -143,7 +143,7 @@ public class AbstractConfigurationServiceTest
         }
 
         @Override
-        protected void fetchTopologyInternal(long epoch)
+        public void fetchTopologyForEpoch(long epoch)
         {
             epochsFetched.add(epoch);
         }
