@@ -486,15 +486,10 @@ public class Property
                     }
                     catch (Throwable t)
                     {
-                        try
-                        {
-                            commands.destroySut(sut, t);
-                            commands.destroyState(state, t);
-                        }
-                        catch (Throwable t2)
-                        {
-                            t.addSuppressed(t2);
-                        }
+                        State finalState = state;
+                        safeHandle(t, () -> commands.onFailure(finalState, sut, maybeRewriteHistory(history, historyTiming), t));
+                        safeHandle(t, () -> commands.destroySut(sut, t));
+                        safeHandle(t, () -> commands.destroyState(finalState, t));
                         throw t;
                     }
                 }
@@ -508,6 +503,18 @@ public class Property
                     seed = rs.nextLong();
                     rs.setSeed(seed);
                 }
+            }
+        }
+
+        private static void safeHandle(Throwable t, CommandsBuilder.FailingRunnable fn)
+        {
+            try
+            {
+                fn.run();
+            }
+            catch (Throwable t2)
+            {
+                t.addSuppressed(t2);
             }
         }
 
@@ -768,11 +775,14 @@ public class Property
         }
     }
 
-    public interface Commands<State, SystemUnderTest>
+    public interface Commands<State, SystemUnderTest> extends StatefulSuccess<State, SystemUnderTest>, StatefulFailure<State, SystemUnderTest>
     {
         Gen<State> genInitialState() throws Throwable;
         SystemUnderTest createSut(State state) throws Throwable;
+        @Override
         default void onSuccess(State state, SystemUnderTest sut, List<String> history) throws Throwable {}
+        @Override
+        default void onFailure(State state, SystemUnderTest sut, List<String> history, Throwable cause) throws Throwable {}
         default void destroyState(State state, @Nullable Throwable cause) throws Throwable {}
         default void destroySut(SystemUnderTest sut, @Nullable Throwable cause) throws Throwable {}
         Gen<Command<State, SystemUnderTest, ?>> commands(State state) throws Throwable;
@@ -790,7 +800,12 @@ public class Property
 
     public interface StatefulSuccess<State, SystemUnderTest>
     {
-        void apply(State state, SystemUnderTest sut, List<String> history) throws Throwable;
+        void onSuccess(State state, SystemUnderTest sut, List<String> history) throws Throwable;
+    }
+
+    public interface StatefulFailure<State, SystemUnderTest>
+    {
+        void onFailure(State state, SystemUnderTest sut, List<String> history, Throwable cause) throws Throwable;
     }
 
     public static class CommandsBuilder<State, SystemUnderTest>
@@ -806,6 +821,8 @@ public class Property
         private Set<Setup<State, SystemUnderTest>> unknownWeights = null;
         @Nullable
         private Map<Predicate<State>, List<Setup<State, SystemUnderTest>>> conditionalCommands = null;
+        @Nullable
+        private Map<Predicate<State>, List<Pair<Setup<State, SystemUnderTest>, Integer>>> conditionalCommandsKnownWeights = null;
         private Gen.IntGen unknownWeightGen = Gens.ints().between(1, 10);
         @Nullable
         private FailingConsumer<State> preCommands = null;
@@ -816,6 +833,7 @@ public class Property
         @Nullable
         private BiFunction<State, Gen<Command<State, SystemUnderTest, ?>>, Gen<Command<State, SystemUnderTest, ?>>> commandsTransformer = null;
         private final List<StatefulSuccess<State, SystemUnderTest>> onSuccess = new ArrayList<>();
+        private final List<StatefulFailure<State, SystemUnderTest>> onFailures = new ArrayList<>();
 
         public CommandsBuilder(Supplier<Gen<State>> stateGen, Function<State, SystemUnderTest> sutFactory)
         {
@@ -909,16 +927,42 @@ public class Property
             return this;
         }
 
+        public CommandsBuilder<State, SystemUnderTest> addIf(Predicate<State> predicate, int weight, Command<State, SystemUnderTest, ?> cmd)
+        {
+            return addIf(predicate, weight, (i1, i2) -> cmd);
+        }
+
+        public CommandsBuilder<State, SystemUnderTest> addIf(Predicate<State> predicate, int weight, Gen<Command<State, SystemUnderTest, ?>> cmd)
+        {
+            return addIf(predicate, weight, (rs, state) -> cmd.next(rs));
+        }
+
+        public CommandsBuilder<State, SystemUnderTest> addIf(Predicate<State> predicate, int weight, Setup<State, SystemUnderTest> cmd)
+        {
+            if (conditionalCommandsKnownWeights == null)
+                conditionalCommandsKnownWeights = new LinkedHashMap<>();
+            conditionalCommandsKnownWeights.computeIfAbsent(predicate, i -> new ArrayList<>()).add(Pair.create(cmd, weight));
+            return this;
+        }
+
         public CommandsBuilder<State, SystemUnderTest> addAllIf(Predicate<State> predicate, Consumer<IfBuilder<State, SystemUnderTest>> sub)
         {
             sub.accept(new IfBuilder<>()
             {
+                @Override
+                public IfBuilder<State, SystemUnderTest> add(int weight, Setup<State, SystemUnderTest> cmd)
+                {
+                    CommandsBuilder.this.addIf(predicate, weight, cmd);
+                    return this;
+                }
+
                 @Override
                 public IfBuilder<State, SystemUnderTest> add(Setup<State, SystemUnderTest> cmd)
                 {
                     CommandsBuilder.this.addIf(predicate, cmd);
                     return this;
                 }
+
 
                 @Override
                 public IfBuilder<State, SystemUnderTest> addIf(Predicate<State> nextPredicate, Setup<State, SystemUnderTest> cmd) {
@@ -931,6 +975,24 @@ public class Property
 
         public interface IfBuilder<State, SystemUnderTest>
         {
+            default IfBuilder<State, SystemUnderTest> add(int weight, Command<State, SystemUnderTest, ?> cmd)
+            {
+                return add(weight, (i1, i2) -> cmd);
+            }
+            default IfBuilder<State, SystemUnderTest> add(int weight, Gen<Command<State, SystemUnderTest, ?>> cmd)
+            {
+                return add(weight, (rs, state) -> cmd.next(rs));
+            }
+            IfBuilder<State, SystemUnderTest> add(int weight, Setup<State, SystemUnderTest> cmd);
+
+            default IfBuilder<State, SystemUnderTest> add(Command<State, SystemUnderTest, ?> cmd)
+            {
+                return add((i1, i2) -> cmd);
+            }
+            default IfBuilder<State, SystemUnderTest> add(Gen<Command<State, SystemUnderTest, ?>> cmd)
+            {
+                return add((rs, state) -> cmd.next(rs));
+            }
             IfBuilder<State, SystemUnderTest> add(Setup<State, SystemUnderTest> cmd);
             IfBuilder<State, SystemUnderTest> addIf(Predicate<State> predicate, Setup<State, SystemUnderTest> cmd);
         }
@@ -953,10 +1015,16 @@ public class Property
             return this;
         }
 
+        public CommandsBuilder<State, SystemUnderTest> onFailure(StatefulFailure<State, SystemUnderTest> fn)
+        {
+            onFailures.add(fn);
+            return this;
+        }
+
         public Commands<State, SystemUnderTest> build()
         {
             Gen<Setup<State, SystemUnderTest>> commandsGen;
-            if (unknownWeights == null && conditionalCommands == null)
+            if (unknownWeights == null && conditionalCommands == null && conditionalCommandsKnownWeights == null)
             {
                 commandsGen = Gens.pick(new LinkedHashMap<>(knownWeights));
             }
@@ -989,15 +1057,36 @@ public class Property
                                         conditionalWeights.put(c, unknownWeightGen.nextInt(rs));
                                 }
                             }
+                            if (conditionalCommandsKnownWeights != null)
+                            {
+                                if (conditionalWeights == null)
+                                    conditionalWeights = new LinkedHashMap<>();
+                                for (List<Pair<Setup<State, SystemUnderTest>, Integer>> commands : conditionalCommandsKnownWeights.values())
+                                {
+                                    for (Pair<Setup<State, SystemUnderTest>, Integer> pair : commands)
+                                        conditionalWeights.put(pair.left, pair.right);
+                                }
+                            }
                         }
                         if (conditionalWeights == null) return nonConditional.next(rs);
                         return (r, s) -> {
                             // need to figure out what conditions apply...
                             LinkedHashMap<Setup<State, SystemUnderTest>, Integer> clone = new LinkedHashMap<>(weights);
-                            for (Map.Entry<Predicate<State>, List<Setup<State, SystemUnderTest>>> e : conditionalCommands.entrySet())
+                            if (conditionalCommands != null)
                             {
-                                if (e.getKey().test(s))
-                                    e.getValue().forEach(c -> clone.put(c, conditionalWeights.get(c)));
+                                for (Map.Entry<Predicate<State>, List<Setup<State, SystemUnderTest>>> e : conditionalCommands.entrySet())
+                                {
+                                    if (e.getKey().test(s))
+                                        e.getValue().forEach(c -> clone.put(c, conditionalWeights.get(c)));
+                                }
+                            }
+                            if (conditionalCommandsKnownWeights != null)
+                            {
+                                for (Map.Entry<Predicate<State>, List<Pair<Setup<State, SystemUnderTest>, Integer>>> e : conditionalCommandsKnownWeights.entrySet())
+                                {
+                                    if (e.getKey().test(s))
+                                        e.getValue().forEach(p -> clone.put(p.left, p.right));
+                                }
                             }
                             Setup<State, SystemUnderTest> select = Gens.pick(clone).next(r);
                             return select.setup(r, s);
@@ -1056,7 +1145,14 @@ public class Property
                 public void onSuccess(State state, SystemUnderTest sut, List<String> history) throws Throwable
                 {
                     for (var fn : onSuccess)
-                        fn.apply(state, sut, history);
+                        fn.onSuccess(state, sut, history);
+                }
+
+                @Override
+                public void onFailure(State state, SystemUnderTest sut, List<String> history, Throwable cause) throws Throwable
+                {
+                    for (var fn : onFailures)
+                        fn.onFailure(state, sut, history, cause);
                 }
             };
         }
@@ -1064,6 +1160,11 @@ public class Property
         public interface FailingConsumer<T>
         {
             void accept(T value) throws Throwable;
+        }
+
+        public interface FailingRunnable
+        {
+            void run() throws Throwable;
         }
 
         public interface FailingBiConsumer<A, B>
