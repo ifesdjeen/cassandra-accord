@@ -334,6 +334,13 @@ public class DurabilityScheduling implements ConfigurationService.Listener
             scheduled = node.scheduler().selfRecurring(() -> {
                 scheduled = null;
                 node.commandStores().any().execute(() -> {
+                    if (exclusiveSyncPoint.syncId.epoch() < node.topology().minEpoch())
+                    {
+                        logger.info("Exclusive sync point triggered for a garbage collected epoch {}, skipping.", exclusiveSyncPoint.syncId.epoch());
+                        restart();
+                        return;
+                    }
+
                     coordinate(node, exclusiveSyncPoint)
                     .addCallback((success, fail) -> {
                         if (fail != null && fail.getClass() != SyncPointErased.class)
@@ -662,8 +669,28 @@ public class DurabilityScheduling implements ConfigurationService.Listener
     }
 
     @Override
-    public void onEpochRetired(Ranges ranges, long epoch)
+    public void onEpochRetired(Ranges retiredRanges, long epoch)
     {
+        synchronized (this)
+        {
+            // No need to cancel work for ranges that are still active
+            if (!node.topology().isFullyRetired(retiredRanges))
+                return;
 
+            Map<Range, ShardScheduler> old = new HashMap<>(this.shardSchedulers);
+            this.shardSchedulers.clear();
+
+            for (Map.Entry<Range, ShardScheduler> e : old.entrySet())
+            {
+                if (retiredRanges.contains(e.getKey()))
+                {
+                    logger.info("Cancelling durability scheduling for {}, since it was retired in epoch {}",
+                                e.getKey(), epoch);
+                    e.getValue().markDefunct();
+                }
+                else
+                    this.shardSchedulers.put(e.getKey(), e.getValue());
+            }
+        }
     }
 }

@@ -368,7 +368,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     }
 
     @Override
-    public void truncateTopologyUntil(long epoch)
+    public void truncateTopologyUntil(long epoch) // TODO (now): rename to plural topologies
     {
         topology.truncateTopologyUntil(epoch);
     }
@@ -383,6 +383,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void onEpochRetired(Ranges ranges, long epoch)
     {
         topology.onEpochRetired(ranges, epoch);
+        durabilityScheduling.onEpochRetired(ranges, epoch);
     }
 
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
@@ -396,6 +397,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void withEpoch(long epoch, BiConsumer<Void, Throwable> callback)
     {
+        if (epoch < topology.minEpoch())
+            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
         if (topology.hasAtLeastEpoch(epoch))
         {
             callback.accept(null, null);
@@ -409,6 +412,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Runnable ifSuccess)
     {
+        if (epoch < topology.minEpoch())
+            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
         if (topology.hasEpoch(epoch))
         {
             ifSuccess.run();
@@ -425,6 +430,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void withEpoch(long epoch, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
+        if (epoch < topology.minEpoch())
+            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
         if (topology.hasEpoch(epoch))
         {
             ifSuccess.run();
@@ -442,6 +449,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     @Inline
     public <T> AsyncChain<T> withEpoch(long epoch, Supplier<? extends AsyncChain<T>> supplier)
     {
+        if (epoch < topology.minEpoch())
+            throw new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch());
         if (topology.hasEpoch(epoch))
         {
             return supplier.get();

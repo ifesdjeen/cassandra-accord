@@ -18,6 +18,10 @@
 
 package accord.impl.list;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -46,6 +50,7 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.TopologyManager;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 
@@ -117,11 +122,14 @@ public class ListAgent implements Agent
         onStale.accept(staleSince, ranges);
     }
 
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class));
     @Override
     public void onUncaughtException(Throwable t)
     {
-        if (!(t instanceof CoordinationFailed) && !(t instanceof SimulatedFault) && !(t instanceof ExecuteSyncPoint.SyncPointErased) && !(t instanceof CancellationException) && !(t.getCause() instanceof CancellationException))
-            onFailure.accept(t);
+        if (expectedExceptions.contains(t.getClass()) || (t instanceof CoordinationFailed))
+            return;
+
+        onFailure.accept(t);
     }
 
     @Override

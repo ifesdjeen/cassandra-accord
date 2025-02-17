@@ -19,6 +19,7 @@
 package accord.topology;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Iterator;
 import java.util.List;
@@ -33,14 +34,16 @@ import javax.annotation.concurrent.GuardedBy;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.ConfigurationService;
 import accord.api.ConfigurationService.EpochReady;
+import accord.api.LocalConfig;
 import accord.api.ProtocolModifiers.QuorumEpochIntersections.Include;
 import accord.api.Scheduler;
 import accord.api.TopologySorter;
-import accord.api.LocalConfig;
 import accord.coordinate.EpochTimeout;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.CommandStore;
@@ -65,8 +68,8 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
-import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
@@ -86,6 +89,7 @@ import static accord.utils.Invariants.nonNull;
  */
 public class TopologyManager
 {
+    private static final Logger logger = LoggerFactory.getLogger(TopologyManager.class);
     private static final FutureEpoch SUCCESS;
 
     static
@@ -109,6 +113,21 @@ public class TopologyManager
         @GuardedBy("TopologyManager.this")
         Ranges closed = Ranges.EMPTY, retired = Ranges.EMPTY;
 
+        private volatile boolean allRetired;
+
+        public boolean allRetired()
+        {
+            if (allRetired)
+                return true;
+
+            if (!retired.containsAll(global.ranges))
+                return false;
+
+            Invariants.require(closed.containsAll(global.ranges));
+            allRetired = true;
+            return true;
+        }
+
         EpochState(Id node, Topology global, TopologySorter sorter, Ranges prevRanges)
         {
             this.self = node;
@@ -116,7 +135,7 @@ public class TopologyManager
             this.local = global.forNode(node).trim();
             Invariants.requireArgument(!global().isSubset());
             this.curShardSyncComplete = new BitSet(global.shards.length);
-            if (global().size() > 0)
+            if (!global().isEmpty())
                 this.syncTracker = new QuorumTracker(new Single(sorter, global()));
             else
                 this.syncTracker = null;
@@ -232,6 +251,7 @@ public class TopologyManager
 
         private static final Epochs EMPTY = new Epochs(new EpochState[0]);
         private final long currentEpoch;
+        // Epochs are sorted in _descending_ order
         private final EpochState[] epochs;
         // nodes we've received sync complete notifications from, for epochs we do not yet have topologies for.
         // Pending sync notifications are indexed by epoch, with the current epoch as index[0], and future epochs
@@ -249,9 +269,39 @@ public class TopologyManager
             this.currentEpoch = epochs.length > 0 ? epochs[0].epoch() : 0;
             this.pending = pending;
             this.futureEpochs = futureEpochs;
-            for (int i=1; i<epochs.length; i++)
+
+            for (int i = 1; i < epochs.length; i++)
                 Invariants.requireArgument(epochs[i].epoch() == epochs[i - 1].epoch() - 1);
-            this.epochs = epochs;
+            int truncateFrom = -1;
+            for (int i = epochs.length - 1; i >= 0; i--)
+            {
+                EpochState epochState = epochs[i];
+                if (epochState.allRetired() &&
+                    (truncateFrom == -1 || truncateFrom == i + 1))
+                {
+                    Invariants.require(epochs[i].syncComplete());
+                    truncateFrom = i;
+                }
+            }
+
+            if (truncateFrom == -1)
+            {
+                this.epochs = epochs;
+            }
+            else
+            {
+                this.epochs = Arrays.copyOf(epochs, truncateFrom);
+                if (logger.isDebugEnabled())
+                {
+                    for (int i = truncateFrom; i < epochs.length; i++)
+                        logger.debug("Retired epoch {} with added/removed ranges {}/{}", epochs[i].epoch(), epochs[i].addedRanges, epochs[i].removedRanges);
+                }
+                if (logger.isTraceEnabled())
+                {
+                    for (EpochState epoch : this.epochs)
+                        logger.trace("Leaving epoch {} with added/removed ranges {}/{}%n", epoch.epoch(), epoch.addedRanges, epoch.removedRanges);
+                }
+            }
         }
 
         private Epochs(EpochState[] epochs)
@@ -366,23 +416,25 @@ public class TopologyManager
          * Mark the epoch as "redundant" for the provided ranges; this means that all transactions that can be
          * proposed for this epoch have now been executed globally.
          */
-        public void epochRetired(Ranges ranges, long epoch)
+        public void epochRetired(Ranges ranges, long epoch) // todo: rename to redundant?
         {
             Invariants.requireArgument(epoch > 0);
-            int i;
+            int retiredIdx;
             if (epoch > currentEpoch)
             {
                 Notifications notifications = pending(epoch);
                 notifications.retired = notifications.retired.union(MERGE_ADJACENT, ranges);
-                i = 0; // record these ranges as complete for all earlier epochs as well
+                retiredIdx = 0; // record these ranges as complete for all earlier epochs as well
             }
             else
             {
-                i = indexOf(epoch);
-                if (i < 0)
+                retiredIdx = indexOf(epoch);
+                if (retiredIdx < 0)
                     return;
             }
-            while (epochs[i].recordRetired(ranges) && ++i < epochs.length) {}
+
+            for (int i = retiredIdx; i < epochs.length; i++)
+                epochs[i].recordRetired(ranges);
         }
 
         private Notifications pending(long epoch)
@@ -716,6 +768,28 @@ public class TopologyManager
         epochs.epochClosed(ranges, epoch);
     }
 
+    /**
+     * If ranges were added in epoch X, and are _not_ present in the current epoch, they
+     * are purged and durability scheduling for them should be cancelled.
+     */
+    public synchronized boolean isFullyRetired(Ranges ranges)
+    {
+        Epochs epochs = this.epochs;
+        EpochState current = epochs.get(epochs.currentEpoch);
+        if (!current.addedRanges.containsAll(ranges))
+            return false;
+
+        long minEpoch = epochs.minEpoch();
+        for (long i = minEpoch; i < epochs.currentEpoch; i++)
+        {
+            EpochState retiredIn = epochs.get(i);
+            if (retiredIn.allRetired() && retiredIn.addedRanges.containsAll(ranges))
+                return true;
+        }
+
+        return false;
+    }
+
     public synchronized void onEpochRetired(Ranges ranges, long epoch)
     {
         epochs.epochRetired(ranges, epoch);
@@ -850,15 +924,20 @@ public class TopologyManager
         return atLeast(select, minEpoch, maxEpoch, isSufficientFor, topologiesCollectors);
     }
 
-
     private <C, K extends Routables<?>, T> T atLeast(K select, long minEpoch, long maxEpoch, Function<EpochState, Ranges> isSufficientFor,
-                                                     Collectors<C, K, T> collectors)
+                                                     Collectors<C, K, T> collectors) throws IllegalArgumentException
     {
         Invariants.requireArgument(minEpoch <= maxEpoch);
         Epochs snapshot = epochs;
 
         if (maxEpoch == Long.MAX_VALUE) maxEpoch = snapshot.currentEpoch;
         else Invariants.require(snapshot.currentEpoch >= maxEpoch, "current epoch %d < max %d", snapshot.currentEpoch, maxEpoch);
+
+        // TODO (review): this doesn't seem to be required anymore since we are now cancelling durability scheduling
+//        if (minEpoch < snapshot.minEpoch())
+//            throw new TopologyRetiredException(minEpoch, snapshot.minEpoch());
+//        if (maxEpoch < snapshot.minEpoch())
+//            throw new TopologyRetiredException(maxEpoch, snapshot.minEpoch());
 
         EpochState maxEpochState = nonNull(snapshot.get(maxEpoch));
         if (minEpoch == maxEpoch && isSufficientFor.apply(maxEpochState).containsAll(select))
@@ -884,8 +963,11 @@ public class TopologyManager
 
         if (i == snapshot.epochs.length)
         {
-            if (!select.isEmpty())
-                throw new IllegalArgumentException("Ranges " + select + " could not be found");
+            // Epochs earlier than minEpoch might have been GC'd, so we can not collect
+            // matching ranges for them. However, if ranges were still present in the min epoch,
+            // we have reported them.
+            if (!select.isEmpty() && !select.without(snapshot.get(minEpoch).global.ranges).isEmpty())
+                throw new IllegalArgumentException(String.format("Ranges %s could not be found", select));
             return collectors.multi(collector);
         }
 
@@ -908,11 +990,15 @@ public class TopologyManager
             collector = collectors.update(collector, next, select, false);
             prev = next;
         } while (i < snapshot.epochs.length);
-        // needd to remove sufficent / added else remaining may not be empty when the final matches are the last epoch
+        // need to remove sufficient / added else remaining may not be empty when the final matches are the last epoch
         remaining = remaining.without(isSufficientFor.apply(prev));
         remaining = remaining.without(prev.addedRanges);
 
-        if (!remaining.isEmpty()) throw new IllegalArgumentException("Ranges " + remaining + " could not be found");
+        // Epochs earlier than minEpoch might have been GC'd, so we can not collect
+        // matching ranges for them. However, if ranges were still present in the min epoch,
+        // we have reported them.
+        if (!remaining.isEmpty() && !select.without(snapshot.get(minEpoch).global.ranges).isEmpty())
+            throw new IllegalArgumentException(String.format("Ranges %s could not be found", remaining));
 
         return collectors.multi(collector);
     }
@@ -1020,8 +1106,10 @@ public class TopologyManager
     public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, BiFunction<Topology, Unseekables<?>, Topology> selectFunction)
     {
         Epochs snapshot = epochs;
-
         EpochState maxState = snapshot.get(maxEpoch);
+        // TODO (review): this does not seem to be necessary anymore now that we're cancelling durabilty scheduling
+//        if (maxState == null && minEpoch < snapshot.minEpoch())
+//            throw new TopologyRetiredException(minEpoch, epochs.minEpoch());
         Invariants.require(maxState != null, "Unable to find epoch %d; known epochs are %d -> %d", maxEpoch, snapshot.minEpoch(), snapshot.currentEpoch);
         if (minEpoch == maxEpoch)
             return new Single(sorter, selectFunction.apply(snapshot.get(minEpoch).global, select));
@@ -1063,6 +1151,8 @@ public class TopologyManager
 
     public boolean hasEpoch(long epoch)
     {
+        if (epoch < minEpoch())
+            throw new TopologyRetiredException(epoch, minEpoch());
         return epochs.get(epoch) != null;
     }
 
@@ -1073,6 +1163,8 @@ public class TopologyManager
 
     public Topology localForEpoch(long epoch)
     {
+        if (epoch < minEpoch())
+            throw new TopologyRetiredException(epoch, minEpoch());
         EpochState epochState = epochs.get(epoch);
         if (epochState == null)
             throw illegalState("Unknown epoch " + epoch);
@@ -1081,6 +1173,8 @@ public class TopologyManager
 
     public Ranges localRangesForEpoch(long epoch)
     {
+        if (epoch < minEpoch())
+            throw new TopologyRetiredException(epoch, minEpoch());
         return epochs.get(epoch).local().rangesForNode(self);
     }
 
@@ -1278,5 +1372,13 @@ public class TopologyManager
         default T none() { throw new UnsupportedOperationException(); }
         T one(EpochState epoch, K select, boolean permitMissing);
         T multi(C collector);
+    }
+
+    public static class TopologyRetiredException extends RuntimeException
+    {
+        public TopologyRetiredException(long epoch, long minEpoch)
+        {
+            super(String.format("Topology %s retired. Min topology %d", epoch, minEpoch));
+        }
     }
 }

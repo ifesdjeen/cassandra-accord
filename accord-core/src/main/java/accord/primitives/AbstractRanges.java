@@ -106,6 +106,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return ((int) supersetLinearMerge(this.ranges, that.ranges)) == that.size();
     }
 
+    public boolean contains(Range range)
+    {
+        return ((int) supersetLinearMerge(this.ranges, new Range[] { range} )) == 1;
+    }
+
     @Override
     public boolean intersectsAll(Unseekables<?> keysOrRanges)
     {
