@@ -30,6 +30,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
 
 import accord.api.Agent;
@@ -38,6 +39,7 @@ import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
+import accord.impl.DefaultLocalListeners;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.InMemorySafeCommand;
@@ -69,6 +71,7 @@ import accord.utils.async.Cancellable;
 import static accord.api.Journal.CommandUpdate;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
+import static accord.utils.Invariants.illegalArgument;
 
 public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 {
@@ -195,6 +198,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 {
                     super.run();
                 }
+                catch (Throwable t)
+                {
+                    throw new IllegalStateException("Caught exception on node " + node.id(), t);
+                }
                 finally
                 {
                     Invariants.require(active == this);
@@ -229,6 +236,13 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             this.cacheLoading = cacheLoading;
             this.journal = journal;
             restore();
+        }
+
+        @VisibleForTesting
+        public void unsafeClearForTesting()
+        {
+            super.unsafeClearForTesting();
+            listeners.clear();
         }
 
         protected void loadRedundantBefore(RedundantBefore redundantBefore)
@@ -335,7 +349,16 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             Pending origin = Pending.Global.activeOrigin();
             if (RecurringPendingRunnable.isRecurring(origin) && context.primaryTxnId() != null && !context.primaryTxnId().isSystemTxn())
                 origin = null;
-            return new DelayedTask<>(() -> executeInContext(this, context, function), origin);
+            return new DelayedTask<>(() -> {
+                try
+                {
+                    return executeInContext(this, context, function);
+                }
+                catch (Throwable t)
+                {
+                    throw illegalArgument(t, "Caught an exception on %d@%d", id, node.id().id);
+                }
+            }, origin);
         }
 
         private <T> AsyncChain<T> submit(DelayedTask<T> task)

@@ -348,6 +348,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         commandStore().updatedRedundantBefore(this, addRedundantBefore);
     }
 
+    protected void unsafeSetRebootstrapping(boolean val)
+    {
+        commandStore().unsafeSetRebootstrapping(val);
+    }
+
     public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
     {
         commandStore().unsafeSetBootstrapBeganAt(newBootstrapBeganAt);
@@ -583,6 +588,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     public MaxDecidedRX maxDecidedRX()
     {
         return commandStore().unsafeGetMaxDecidedRX();
+    }
+
+    public boolean safeToCoordinate(TxnId txnId, Unseekables<?> participants)
+    {
+        return !commandStore().unsafeGetRebootstrapping() || safeToReadAt(txnId).intersects(participants);
     }
 
     public DurableBefore durableBefore()

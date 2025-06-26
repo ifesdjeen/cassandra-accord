@@ -65,6 +65,7 @@ import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURA
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_DATA_STORE_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_LOST_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.QUORUM_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
@@ -146,6 +147,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
     private int maxConflictsUpdates = 0;
     protected RangesForEpoch rangesForEpoch;
+    private boolean rebootstrapping = false;
 
     /**
      * safeToRead is related to RedundantBefore, but a distinct concept.
@@ -164,6 +166,18 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     @Nullable private RejectBefore rejectBefore;
+
+    public void unsafeClearForTesting()
+    {
+        progressLog.clear();
+        bootstraps.clear();
+        rangesForEpoch = null;
+        bootstrapBeganAt = emptyBootstrapBeganAt();
+        redundantBefore = RedundantBefore.EMPTY;
+        maxConflicts = MaxConflicts.EMPTY;
+        maxDecidedRX = MaxDecidedRX.EMPTY;
+        safeToRead = emptySafeToRead();
+    }
 
     static class WaitingOnSync
     {
@@ -250,7 +264,8 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         return maxDecidedRX;
     }
 
-    final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
+    @VisibleForTesting
+    public final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
     }
@@ -343,6 +358,17 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     {
         redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
     }
+
+    protected void unsafeSetRebootstrapping(boolean val)
+    {
+        rebootstrapping = val;
+    }
+
+    protected boolean unsafeGetRebootstrapping()
+    {
+        return rebootstrapping;
+    }
+
 
     /**
      * This method may be invoked on a non-CommandStore thread
@@ -544,6 +570,50 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                 metadata.flatMap(e -> e.data).beginAsResult(),
                 metadata.flatMap(e -> e.reads).beginAsResult());
         };
+    }
+
+    /**
+     * Rebootstraps some of the ranges for the command store. It follows steps similar to what
+     * bootstrap would go through, with two differences:
+     *
+     *   * Marks pre-rebootstrap transactions with LOCALLY_LOST status, which means the node can not
+     *     safely participate in pre-rebootstrap transactions, _even_ if they're coming after the node is
+     *     done bootstrapping.
+     *   * Marks the store as rebootstrapping, which will preclude rebootstrapping node from responding
+     *     to PreAccept, Accept, and BeginRecovery and computing dependencies while node is being rebootstrapped,
+     *     and ranges aren't ready to coordinate.
+     */
+    protected EpochReady rebootstrap(Node node, Ranges ranges, long epoch)
+    {
+        AsyncResult<EpochReady> metadata = submit((PreLoadContext.Empty) () -> "New Epoch", safeStore -> {
+            safeStore.unsafeSetRebootstrapping(true);
+            // Mark unsafe to read first
+            safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
+
+            Bootstrap bootstrap = new Bootstrap(node, this, epoch, ranges, DataStore.RequestKind.Sync);
+            bootstraps.add(bootstrap);
+            // If rebootstrap can grab a later timestamp for subsequent attempts, but this timestamp is enough for us
+            // to establish which transactions, for which ranges the node can safely participate in).
+            TxnId unsafeBefore = bootstrap.start(safeStore);
+            logger.debug("Rebootstrap timestamp on {}@{}: {}", id, node.id(), unsafeBefore);
+            safeStore.unsafeUpsertRedundantBefore(RedundantBefore.create(ranges, unsafeBefore, LOCALLY_LOST_ONLY));
+            return new EpochReady(epoch, null, null,
+                                  bootstrap.data,
+                                  bootstrap.reads);
+        });
+
+        AsyncResult<Void> readyToCoordinate = readyToCoordinate(ranges, epoch);
+        return new EpochReady(epoch,
+                              metadata.<Void>map(ignore -> null).beginAsResult(),
+                              readyToCoordinate.flatMap(ignore -> {
+                                  return this.<Void>submit((PreLoadContext.Empty) () -> "New Epoch", safeStore -> {
+                                      logger.debug("Finished rebootstrap timestamp on {}@{}, marking safe", id, node.id());
+                                      safeStore.unsafeSetRebootstrapping(false);
+                                      return null;
+                                  });
+                              }).beginAsResult(),
+                              metadata.flatMap(e -> e.data).beginAsResult(),
+                              metadata.flatMap(e -> e.reads).beginAsResult());
     }
 
     /**
@@ -974,6 +1044,11 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         setMaxConflicts(updated);
     }
 
+    public boolean isRebootstrapping()
+    {
+        return rebootstrapping;
+    }
+
     public static NavigableMap<TxnId, Ranges> emptyBootstrapBeganAt()
     {
         return ImmutableSortedMap.of(TxnId.NONE, Ranges.EMPTY);
@@ -987,5 +1062,19 @@ public abstract class CommandStore implements SequentialAsyncExecutor
     public NodeCommandStoreService node()
     {
         return node;
+    }
+
+    /**
+     * Command store has lost information about this transaction and can not respond to queries related to it.
+     */
+    public static class TransactionLostException extends RuntimeException
+    {
+    }
+
+    /**
+     * Exception indicating that the node is not ready to compute dependencies due to rebootstrap
+     */
+    public static class NotReadyException extends RuntimeException
+    {
     }
 }

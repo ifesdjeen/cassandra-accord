@@ -513,8 +513,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         @Override
         public void timeout()
         {
-            if (!super.cancel())
-                return;
+            super.timeout();
 
             slowTimeout = null;
             if (committed) callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));

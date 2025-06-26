@@ -70,6 +70,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
+import static accord.local.RedundantStatus.Property.LOCALLY_LOST;
 import static accord.local.RedundantStatus.WAS_OWNED_SYNCED;
 import static accord.local.RedundantStatus.WAS_OWNED_ONLY;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
@@ -378,6 +379,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         static @Nonnull Boolean isShardOnlyApplied(Bounds bounds, @Nonnull Boolean prev, TxnId txnId)
         {
             return is(bounds, prev, txnId, SHARD_APPLIED);
+        }
+
+        static @Nonnull Boolean isLocallyIncomplete(Bounds bounds, @Nonnull Boolean prev, TxnId txnId)
+        {
+            return is(bounds, prev, txnId, LOCALLY_LOST);
         }
 
         static @Nonnull Boolean is(Bounds bounds, @Nonnull Boolean prev, TxnId txnId, Property property)
@@ -819,7 +825,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     public static RedundantBefore EMPTY = new RedundantBefore();
 
     private final Ranges staleRanges, locallyRetiredRanges;
-    private final TxnId maxBootstrap, maxShardAppliedBefore, maxGcBefore;
+    private final TxnId maxBootstrap, maxShardAppliedBefore, maxGcBefore, maxLocallyIncomplete;
     private final TxnId minShardAndLocallyAppliedBefore, minGcBefore;
     private final long minGcHlcBefore;
     private final long maxStartEpoch, minLocallyRetiredEpoch;
@@ -827,7 +833,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     private RedundantBefore()
     {
         staleRanges = locallyRetiredRanges = Ranges.EMPTY;
-        maxBootstrap = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
+        maxBootstrap = maxShardAppliedBefore = maxGcBefore = maxLocallyIncomplete = TxnId.NONE;
         minShardAndLocallyAppliedBefore = minGcBefore = TxnId.MAX;
         minGcHlcBefore = 0L;
         maxStartEpoch = 0;
@@ -839,7 +845,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         super(inclusiveEnds, starts, values);
         staleRanges = extractRanges(values, b -> b.staleUntilAtLeast != null);
         locallyRetiredRanges = extractRanges(values, Bounds::isLocallyRetired);
-        TxnId maxBootstrap = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE;
+        TxnId maxBootstrap = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE, maxUnsafeBefore = TxnId.NONE;
         TxnId minShardAndLocallyRedundantBefore = TxnId.MAX, minGcBefore = TxnId.MAX;
         long minGcHlcBefore = Long.MAX_VALUE;
         long minLocallyRetiredEpoch = Long.MAX_VALUE, maxStartEpoch = 0;
@@ -853,6 +859,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 TxnId bootstrappedAt = bounds.maxBound(PRE_BOOTSTRAP_OR_STALE);
                 if (bootstrappedAt.compareTo(maxBootstrap) > 0)
                     maxBootstrap = bootstrappedAt;
+            }
+            {
+                TxnId unsafeBefore = bounds.maxBound(LOCALLY_LOST);
+                if (unsafeBefore.compareTo(maxUnsafeBefore) > 0)
+                    maxUnsafeBefore = unsafeBefore;
             }
             {
                 TxnId gcBefore = bounds.maxBound(GC_BEFORE);
@@ -878,6 +889,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         this.maxBootstrap = maxBootstrap;
         this.maxShardAppliedBefore = maxShardAppliedBefore;
         this.maxGcBefore = maxGcBefore;
+        this.maxLocallyIncomplete = maxUnsafeBefore;
         this.minShardAndLocallyAppliedBefore = minShardAndLocallyRedundantBefore;
         this.minGcBefore = minGcBefore;
         this.minGcHlcBefore = minGcHlcBefore;

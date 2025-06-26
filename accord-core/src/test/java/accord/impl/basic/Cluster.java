@@ -762,54 +762,87 @@ public class Cluster
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
+
                 Id id = pickNodeNotBootstrapping(random, nodesList, nodeMap);
                 if (id == null)
                     return;
 
-                CommandStores stores = nodeMap.get(id).commandStores();
+                Node node = nodeMap.get(id);
+                CommandStores stores = node.commandStores();
                 while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
 
-                trace.debug("Triggering store cleanup and journal replay for node " + id);
+                boolean rebootstrap = random.nextBoolean() && !overlapsWithBootstrapping(node, nodeMap);
+                trace.debug(String.format("Triggering %s for node %s",
+                                          rebootstrap ? "rebootstrap" : "bounce and journal replay",
+                                          id));
                 CommandsForKey.disableLinearizabilityViolationsReporting();
 
                 // Clean data and restore from snapshot
-                ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
+                ListStore listStore = (ListStore) node.commandStores().dataStore();
                 NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
+                listStore.clear();
+
+                // We are simulating node restart, so its remote listeners will also be gone
+                ((DefaultRemoteListeners) node.remoteListeners()).clear();
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
-                listStore.clear();
-                // We are simulating node restart, so its remote listeners will also be gone
-                ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
-                for (CommandStore store : stores.all())
-                {
-                    InMemoryCommandStore commandStore = (InMemoryCommandStore) store;
-                    commandStore.clear();
-                }
-
-                // Replay journal
                 Journal journal = journalMap.get(id);
-                List<? extends Journal.TopologyUpdate> list = journal.replayTopologies();
+
                 Journal.TopologyUpdate lastUpdate = null;
-                for (Journal.TopologyUpdate update : list)
                 {
-                    Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
-                    lastUpdate = update;
+                    Iterator<? extends Journal.TopologyUpdate> iter = journal.replayTopologies().iterator();
+                    while (iter.hasNext())
+                    {
+                        Journal.TopologyUpdate update = iter.next();
+                        Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
+                        lastUpdate = update;
+                    }
+
+                    // Reset and restore command store states
+                    for (CommandStore store : stores.all())
+                    {
+                        DelayedCommandStore store1 = ((DelayedCommandStore) store);
+                        CommandStores.RangesForEpoch beforeRestore = store1.unsafeGetRangesForEpoch();
+                        store1.unsafeClearForTesting();
+                        if (lastUpdate != null)
+                            store1.unsafeSetRangesForEpoch(lastUpdate.commandStores.get(store.id()));
+                        CommandStores.RangesForEpoch afterRestore = store1.unsafeGetRangesForEpoch();
+                        if (!beforeRestore.equals(afterRestore))
+                            Invariants.require(beforeRestore.equals(afterRestore));
+                    }
+
+                    if (lastUpdate != null)
+                        node.commandStores().resetTopology(lastUpdate);
                 }
 
-                if (lastUpdate != null)
-                    ((DelayedCommandStores) nodeMap.get(id).commandStores()).validateShardStateForTesting(lastUpdate);
+                if (rebootstrap)
+                {
+                    node.durability().stop();
+                    ((InMemoryJournal)journal).dropAll();
 
-                listStore.restore();
-                for (CommandStore store : stores.all())
-                    ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
-                journal.replay(stores);
+                    stores.rebootstrap(node).beginAsResult();
+                    while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
+                    Invariants.require(verifyBootstrapping(node), "Node %s should have been bootstrapping", node);
+                    CommandsForKey.enableLinearizabilityViolationsReporting();
+                    node.durability().start();
+                }
+                else
+                {
+                    if (lastUpdate != null)
+                        ((DelayedCommandStores) node.commandStores()).validateShardStateForTesting(lastUpdate);
 
-                // Re-enable safety checks
-                while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
-                CommandsForKey.enableLinearizabilityViolationsReporting();
-                verifyConsistentRestore(beforeStores, stores.all());
-                // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
-                listStore.checkAtLeast(stores, prevData);
+                    listStore.restore();
+                    for (CommandStore store : stores.all())
+                        ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
+                    journal.replay(stores);
+
+                    // Re-enable safety checks
+                    while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
+                    CommandsForKey.enableLinearizabilityViolationsReporting();
+                    verifyConsistentRestore(beforeStores, stores.all());
+                    // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
+                    listStore.checkAtLeast(stores, prevData);
+                }
                 trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
@@ -893,6 +926,27 @@ public class Cluster
             }, 0, SECONDS);
         }
 
+    }
+
+    private static boolean verifyBootstrapping(Node node)
+    {
+        CommandStore[] stores = node.commandStores().all();
+        return Stream.of(stores).allMatch(CommandStore::isBootstrapping);
+    }
+
+    private static boolean overlapsWithBootstrapping(Node pick, Map<Id, Node> nodeMap)
+    {
+        Ranges localRanges = pick.commandStores().local().ranges();
+        for (Map.Entry<Id, Node> e : nodeMap.entrySet())
+        {
+            for (CommandStore commandStore : e.getValue().commandStores().all())
+            {
+                if (commandStore.isBootstrapping() &&
+                    (e.getKey().equals(pick.id()) || commandStore.unsafeGetRangesForEpoch().all().intersects(localRanges)))
+                    return true;
+            }
+        }
+        return false;
     }
 
     private static Int2ObjectHashMap<NavigableMap<TxnId, Command>> copyCommands(CommandStore[] stores)

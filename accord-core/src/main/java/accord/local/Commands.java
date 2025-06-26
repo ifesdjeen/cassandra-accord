@@ -91,6 +91,7 @@ import static accord.local.LoadKeysFor.WRITE;
 import static accord.local.PreLoadContext.contextFor;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
+import static accord.local.RedundantStatus.Property.LOCALLY_LOST;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
@@ -966,7 +967,7 @@ public class Commands
     }
 
     /**
-     * Purge all or part of the metadata for a Commmand
+     * Purge all or part of the metadata for a Command
      */
     public static Command purge(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants participants, Cleanup cleanup, boolean notifyListeners)
     {
@@ -1090,6 +1091,10 @@ public class Commands
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants newParticipants)
     {
         StoreParticipants cleanupParticipants = newParticipants.filter(LOAD, safeStore, command.txnId(), command.executeAtIfKnown());
+        RedundantStatus status = safeStore.redundantBefore().status(command.txnId(), null, cleanupParticipants.touches());
+        if (status.any(LOCALLY_LOST))
+            throw new CommandStore.TransactionLostException();
+
         Cleanup cleanup = shouldCleanup(FULL, safeStore, command, cleanupParticipants);
         if (cleanup == NO)
         {
@@ -1545,7 +1550,9 @@ public class Commands
             return UPDATE_TXN_KEEP_DEPS;
 
         if (!containsAll(partialDeps, participants.stillTouches()))
+        {
             return INSUFFICIENT;
+        }
 
         if (txnId.isSyncPoint() && expectKnown.is(DepsKnown))
         {
@@ -1569,7 +1576,7 @@ public class Commands
         return adding == null ? required.isEmpty() : adding.covers(required);
     }
 
-    private static <V> boolean containsAll(Deps adding, Participants<?> required)
+    private static boolean containsAll(Deps adding, Participants<?> required)
     {
         return adding == null ? required.isEmpty() : adding.covers(required);
     }

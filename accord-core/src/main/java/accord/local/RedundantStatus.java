@@ -26,6 +26,7 @@ import static accord.local.RedundantStatus.Cmp.LT;
 import static accord.local.RedundantStatus.Cmp.LE;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.RedundantStatus.Coverage.SOME;
+import static accord.local.RedundantStatus.Property.*;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
@@ -180,6 +181,7 @@ public class RedundantStatus
         public static final SomeStatus LOCALLY_APPLIED_ONLY = oneSlow(LOCALLY_APPLIED);
         public static final SomeStatus QUORUM_APPLIED_ONLY = oneSlow(QUORUM_APPLIED);
         public static final SomeStatus SHARD_APPLIED_ONLY = oneSlow(SHARD_APPLIED);
+        public static final SomeStatus LOCALLY_LOST_ONLY = oneSlow(LOCALLY_LOST);
         public static final SomeStatus LOCALLY_DURABLE_TO_DATA_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_DATA_STORE);
         public static final SomeStatus LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_COMMAND_STORE);
         public static final SomeStatus GC_BEFORE_AND_LOCALLY_DURABLE = multi(GC_BEFORE, LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE);

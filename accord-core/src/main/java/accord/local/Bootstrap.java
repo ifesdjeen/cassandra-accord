@@ -28,6 +28,7 @@ import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.DataStore.FetchRanges;
 import accord.api.DataStore.FetchResult;
+import accord.api.DataStore.RequestKind;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.primitives.Ranges;
@@ -40,6 +41,9 @@ import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
+import static accord.api.DataStore.RequestKind.*;
+import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
+import static accord.local.durability.DurabilityService.SyncRemote.MinorityQuorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -110,12 +114,12 @@ class Bootstrap
             this.attempt = attempt;
         }
 
-        void start(SafeCommandStore safeStore)
+        TxnId start(SafeCommandStore safeStore)
         {
             if (valid.isEmpty())
             {
                 maybeComplete();
-                return;
+                return globalSyncId;
             }
 
             globalSyncId = node.nextTxnIdWithDefaultFlags(ExclusiveSyncPoint, Routable.Domain.Range);
@@ -128,7 +132,7 @@ class Bootstrap
                     if (failure2 != null)
                         node.agent().acceptAndWrap(null, failure2);
                 }));
-                return;
+                return globalSyncId;
             }
 
             // we fix here the ranges we use for the synthetic command, even though we may end up only finishing a subset
@@ -145,10 +149,11 @@ class Bootstrap
                                .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> store.build((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
                                    if (valid.isEmpty()) // we've lost ownership of the range
                                        return AsyncResults.success(Ranges.EMPTY);
-                                   return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this);
+                                   return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this, Fetch);
                                })))
                                .flatMap(i -> i)
                                .begin(this);
+            return globalSyncId;
         }
 
         // we no longer want to fetch these ranges (perhaps we no longer own them)
@@ -356,6 +361,7 @@ class Bootstrap
         }
     }
 
+    final RequestKind kind;
     final Node node;
     final CommandStore store;
     final long epoch;
@@ -369,6 +375,12 @@ class Bootstrap
 
     public Bootstrap(Node node, CommandStore store, long epoch, Ranges ranges)
     {
+        this(node, store, epoch, ranges, Fetch);
+    }
+
+    public Bootstrap(Node node, CommandStore store, long epoch, Ranges ranges, RequestKind kind)
+    {
+        this.kind = kind;
         this.node = node;
         this.store = store;
         this.epoch = epoch;
@@ -376,23 +388,23 @@ class Bootstrap
         this.remaining = ranges;
     }
 
-    void start(SafeCommandStore safeStore0)
+    TxnId start(SafeCommandStore safeStore0)
     {
-        restart(safeStore0, allValid, 0);
+        return restart(safeStore0, allValid, 0);
     }
 
-    private synchronized void restart(SafeCommandStore safeStore, Ranges ranges, int count)
+    private synchronized TxnId restart(SafeCommandStore safeStore, Ranges ranges, int count)
     {
         ranges = ranges.slice(allValid);
         if (ranges.isEmpty())
-            return;
+            return null;
 
         for (Attempt attempt : inProgress)
             Invariants.requireArgument(!ranges.intersects(attempt.valid));
 
         Attempt attempt = new Attempt(ranges, count);
         inProgress.add(attempt);
-        attempt.start(safeStore);
+        return attempt.start(safeStore);
     }
 
     synchronized void complete(Attempt attempt)

@@ -48,6 +48,7 @@ import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
 import accord.impl.mock.Network;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
@@ -71,6 +72,7 @@ import accord.utils.async.AsyncResults;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.local.Node.Id.NONE;
+import static accord.utils.Invariants.illegalState;
 import static com.google.common.base.Functions.identity;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -135,7 +137,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     @Override
     public void onInconsistentTimestamp(Command command, Timestamp prev, Timestamp next)
     {
-        throw new AssertionError("Inconsistent execution timestamp detected for command " + command + ": " + prev + " != " + next);
+        illegalState("Inconsistent execution timestamp detected for command %s: %s != %s", command, prev, next);
     }
 
     @Override
@@ -156,16 +158,31 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
         onStale.accept(staleSince, ranges);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class));
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(CommandStore.TransactionLostException.class,
+                                                                                        CommandStore.NotReadyException.class,
+                                                                                        SimulatedFault.class,
+                                                                                        ExecuteSyncPoint.SyncPointErased.class,
+                                                                                        CancellationException.class,
+                                                                                        TopologyManager.TopologyRetiredException.class));
+
     @Override
     public void onUncaughtException(Throwable t)
     {
-        if (expectedExceptions.contains(t.getClass()))
+        if (expectedExceptions.contains(t.getClass()) ||
+            (t.getCause() != null && expectedExceptions.contains(t.getCause().getClass())) ||
+            (expectedExceptions.contains(getCauseRecursive(t).getClass())))
             return;
 
         if (!(t instanceof CoordinationFailed)
             && !(t.getCause() instanceof CancellationException))
             onFailure.accept(t);
+    }
+
+    private static Throwable getCauseRecursive(Throwable t)
+    {
+        if (t.getCause() == null || t.getCause() == t)
+            return t;
+        return getCauseRecursive(t.getCause());
     }
 
     @Override

@@ -699,7 +699,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         return txnId.hashCode();
     }
 
-    void onFailure(CommitOrReadNack failReply, Throwable throwable)
+    protected void onFailure(CommitOrReadNack failReply, Throwable throwable)
     {
         if (!cancel())
             return;

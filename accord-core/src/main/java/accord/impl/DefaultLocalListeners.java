@@ -25,6 +25,8 @@ import java.util.function.BiFunction;
 
 import javax.annotation.Nullable;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import accord.api.LocalListeners;
 import accord.api.RemoteListeners;
 import accord.local.Command;

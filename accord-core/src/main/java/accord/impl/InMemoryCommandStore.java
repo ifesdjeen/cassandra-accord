@@ -925,7 +925,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     }
                     if (isShadowedByPreBootstrap) continue;
                 }
-                illegalState();
+                illegalState("Prev: %s, updated: %s, command: %s", prev, updated, command);
             }
         }
     }
@@ -1222,6 +1222,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     // they are brought up to latest values _before_ replay.
     public void clear()
     {
+        super.unsafeClearForTesting();
         Invariants.require(current == null);
         progressLog.clear();
         commands.clear();

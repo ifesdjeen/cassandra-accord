@@ -705,6 +705,18 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return newLocalTopology.epoch() != 1;
     }
 
+    public AsyncChain<Void> rebootstrap(Node node)
+    {
+        List<EpochReady> results = new ArrayList<>();
+        Snapshot snapshot = current;
+        for (ShardHolder shard : snapshot.shards)
+            results.add(shard.store.rebootstrap(node, shard.ranges.all(), snapshot.global.epoch()));
+        return AsyncChains.reduce(results.stream()
+                                         .map(b -> b.reads.beginAsResult())
+                                         .collect(Collectors.toList()),
+                                  Reduce.toNull());
+    }
+
     private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology, boolean startSync)
     {
         Invariants.requireArgument(!newTopology.isSubset(), "Use full topology for CommandStores.updateTopology");
@@ -1043,6 +1055,57 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         nextId = maxId + 1;
         loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global));
+    }
+
+    public synchronized void resetTopology(Journal.TopologyUpdate update)
+    {
+        // TODO: assert
+        Snapshot current = this.current;
+        Invariants.require(update.global.epoch() == current.local.epoch());
+        ShardHolder[] shards = new ShardHolder[current.commandStores.size()];
+        int i = 0;
+        int maxId = -1;
+        for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+        {
+            int storeId = e.getKey();
+            RangesForEpoch ranges = e.getValue();
+            Invariants.require(ranges != null);
+            ShardHolder shard = new ShardHolder(current.byId(storeId), ranges);
+            EpochUpdateHolder holder = shard.store.epochUpdateHolder;
+            ranges.forEach(new BiConsumer<Long, Ranges>()
+            {
+                RangesForEpoch accumulator = null;
+                Ranges prev = null;
+                public void accept(Long epoch, Ranges ranges)
+                {
+                    if (accumulator == null)
+                        accumulator = new RangesForEpoch(epoch, ranges);
+                    else
+                        accumulator = accumulator.withRanges(epoch, ranges);
+
+                    Ranges additions = Ranges.EMPTY;
+                    Ranges removals = Ranges.EMPTY;
+                    if (prev != null)
+                    {
+                        additions = ranges.without(prev);
+                        removals = prev.without(ranges);
+                    }
+
+                    if (!additions.isEmpty())
+                        holder.add(epoch, accumulator, additions);
+                    if (!removals.isEmpty())
+                        holder.remove(epoch, accumulator, removals);
+                    shard.store.unsafeUpdateRangesForEpoch();
+                    prev = ranges;
+                }
+            });
+
+            shards[storeId] = shard;
+            maxId = Math.max(maxId, storeId);
+        }
+
+        nextId = maxId + 1;
+        loadSnapshot(new Snapshot(shards, current.local, current.global));
     }
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)
