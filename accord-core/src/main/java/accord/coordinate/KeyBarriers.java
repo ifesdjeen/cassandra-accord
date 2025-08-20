@@ -189,6 +189,6 @@ public class KeyBarriers
     {
         RoutingKeys keys = RoutingKeys.of(key);
         Topologies topologies = node.topology().forEpoch(keys, txnId.epoch(), SHARE);
-        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, IsApplied, true, keys);
+        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, keys, IsApplied, true);
     }
 }

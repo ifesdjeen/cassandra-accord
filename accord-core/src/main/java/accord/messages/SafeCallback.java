@@ -52,7 +52,7 @@ public class SafeCallback<T extends Reply>
 
     public void timeout(Node.Id to)
     {
-        failure(to, new Timeout(null, null));
+        failure(to, null);
     }
 
     public void onCallbackFailure(Node.Id to, Throwable t)

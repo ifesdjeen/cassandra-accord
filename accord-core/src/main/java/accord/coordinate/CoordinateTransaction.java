@@ -109,7 +109,11 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     @Override
     void start()
     {
-        if (txnId != null && txnId.hasPrivilegedCoordinator()) new LocalExecute().start();
+        if (txnId != null && txnId.hasPrivilegedCoordinator())
+        {
+            node.register(this);
+            new LocalExecute().start();
+        }
         else super.start();
     }
 
@@ -130,7 +134,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 // we must include Deps from fast path votes from earlier epochs that may have witnessed later transactions
                 // TODO (desired): we might mask some bugs by merging more responses than we strictly need, so optimise this to optionally merge minimal deps
                 node.agent().coordinatorEvents().onPreAccepted(txnId);
-                executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, callback);
+                executeAdapter().execute(node, executor, topologies, route, Ballot.ZERO, FAST, flags, txnId, txn, txnId, deps, deps, finishAndTakeCallback());
                 return;
             }
         }
@@ -140,20 +144,20 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             if (deps != null)
             {
                 node.agent().coordinatorEvents().onPreAccepted(txnId);
-                proposeAdapter().propose(node, executor, topologies, route, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, callback);
+                proposeAdapter().propose(node, executor, topologies, route, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, finishAndTakeCallback());
                 return;
             }
         }
         else if (executeAt.is(REJECTED))
         {
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, finishAndTakeCallback());
             node.agent().coordinatorEvents().onRejected(txnId);
             return;
         }
 
         Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
         node.agent().coordinatorEvents().onPreAccepted(txnId);
-        proposeAdapter().propose(node, executor, topologies, route, SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
+        proposeAdapter().propose(node, executor, topologies, route, SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, finishAndTakeCallback());
     }
 
     private Deps mergeFastOrMediumDeps(SortedListMap<?, PreAcceptOk> oks)
@@ -223,7 +227,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             success();
             if (failure != null)
             {
-                setFailure(failure);
+                finishWithFailureOverride(failure);
             }
             else
             {
@@ -243,7 +247,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 }
                 else
                 {
-                    setFailure(new Preempted(txnId, route.homeKey()));
+                    finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 }
             }
         }

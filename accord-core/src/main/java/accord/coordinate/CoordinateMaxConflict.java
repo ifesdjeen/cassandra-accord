@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.function.BiConsumer;
 
 import accord.api.VisibleForImplementation;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
@@ -31,6 +32,7 @@ import accord.messages.GetMaxConflict.GetMaxConflictOk;
 import accord.primitives.FullRoute;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
@@ -56,7 +58,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
 
     private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, Topologies topologies, BiConsumer<Timestamp, Throwable> callback)
     {
-        super(node, executor, route, null, topologies, callback);
+        super(node, executor, route, TxnId.NONE, topologies, callback);
         this.maxConflict = Timestamp.NONE;
         this.executionEpoch = executionEpoch;
         this.tracker = new QuorumTracker(topologies);
@@ -102,14 +104,15 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onFailureInternal(Node.Id from, Throwable failure)
     {
+        recordFailure(failure);
         if (tracker.recordFailure(from) == Failed)
-            setFailure(failure);
+            finishOnFailure();
     }
 
     @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
-        setFailure(mismatch);
+        finishWithFailureOverride(mismatch);
     }
 
     @Override
@@ -121,6 +124,12 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted(Topologies topologies)
     {
-        callback.accept(maxConflict, null);
+        finishAndInvokeCallback(maxConflict, null);
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
     }
 }

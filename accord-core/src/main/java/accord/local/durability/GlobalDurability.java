@@ -223,7 +223,7 @@ public class GlobalDurability implements Callback<Object>
     public synchronized void onFailure(Node.Id from, Throwable failure)
     {
         --inflight;
-        if (failure instanceof Timeout) logger.warn("Failed to fetch DurableBefore from {} due to timeout", from);
+        if (failure == null) logger.warn("Failed to fetch DurableBefore from {} due to timeout", from);
         else logger.warn("Failed to fetch DurableBefore from {}", from, failure);
     }
 

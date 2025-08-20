@@ -109,7 +109,7 @@ class CoordinateSyncPointTest
                                                    return store.build(() -> {
                                                        ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), store, 1);
                                                        execute.start();
-                                                       return execute;
+                                                       return execute.onDone;
                                                    });
                                                }
                                                ).flatMap(Function.identity()).beginAsResult();

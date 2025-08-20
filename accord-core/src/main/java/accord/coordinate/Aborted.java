@@ -18,35 +18,43 @@
 
 package accord.coordinate;
 
-import accord.api.Agent;
+import javax.annotation.Nullable;
+
+import accord.api.RoutingKey;
+import accord.primitives.Route;
+import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-public class EpochTimeout extends Timeout
+/**
+ * Thrown when a coordinator is preempted by another recovery
+ * coordinator intending to complete the transaction
+ */
+public class Aborted extends CoordinationFailed
 {
-    public final long epoch;
-
-    public static EpochTimeout timeout(long epoch, Agent agent)
+    public static Aborted aborted(TxnId txnId, @Nullable Route<?> route)
     {
-        agent.coordinatorEvents().onEpochTimeout(epoch);
-        return new EpochTimeout(epoch);
+        return new Aborted(txnId, route == null ? null : route.homeKey());
     }
 
-    EpochTimeout(long epoch)
+    public static Aborted aborted(TxnId txnId, @Nullable RoutingKey homeKey)
     {
-        super(null, null, "Timeout waiting for epoch " + epoch);
-        this.epoch = epoch;
+        return new Aborted(txnId, homeKey);
     }
 
-    private EpochTimeout(long epoch, EpochTimeout cause)
+    private Aborted(TxnId txnId, @Nullable RoutingKey homeKey)
     {
-        super(null, null, cause);
-        this.epoch = epoch;
+        super(txnId, homeKey);
+    }
+
+    private Aborted(TxnId txnId, @Nullable RoutingKey homeKey, Aborted cause)
+    {
+        super(txnId, homeKey, cause);
     }
 
     @Override
-    public EpochTimeout wrap()
+    public Aborted wrap()
     {
-        Invariants.require(this.getClass() == EpochTimeout.class);
-        return new EpochTimeout(epoch, this);
+        Invariants.require(this.getClass() == Aborted.class);
+        return new Aborted(txnId(), homeKey(), this);
     }
 }

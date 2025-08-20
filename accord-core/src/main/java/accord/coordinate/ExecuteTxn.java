@@ -59,6 +59,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
@@ -91,7 +92,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
-public class ExecuteTxn extends ReadCoordinator<ReadReply>
+public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 {
     class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
     {
@@ -152,7 +153,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
     final Deps sendDeps;
     final Topologies allTopologies;
     final CoordinationFlags flags;
-    final BiConsumer<? super Result, Throwable> callback;
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
 
@@ -163,7 +163,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId);
+        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId, callback);
         this.path = ballot == Ballot.ZERO ? path : RECOVER;
         this.txn = txn;
         this.route = route;
@@ -173,7 +173,6 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         this.stableDeps = stableDeps;
         this.sendDeps = sendDeps;
         this.flags = flags;
-        this.callback = callback;
         this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
         this.readScope = txn == null ? route : route.intersecting(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
@@ -211,7 +210,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             // we can't safely take the fast path via PRIVILEGED_COORDINATOR optimisation if we aren't permitted to execute locally,
             // so we take the MEDIUM or SLOW path
             adapter().propose(node, executor, null, route, txnId.hasMediumPath() ? Accept.Kind.MEDIUM : Accept.Kind.SLOW,
-                              Ballot.ZERO, txnId, txn, executeAt, stableDeps, callback);
+                              Ballot.ZERO, txnId, txn, executeAt, stableDeps, takeCallback());
         }
         else
         {
@@ -354,7 +353,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
 
             case Redundant:
             case Rejected:
-                callback.accept(null, new Preempted(txnId, route.homeKey()));
+                invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
 
             case Insufficient:
@@ -383,7 +382,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
             // just make sure to check the integrations to make sure it won't break anything
             Result result = txn.result(txnId, executeAt, data);
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
-            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, callback);
+            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
         }
         else
         {
@@ -403,7 +402,7 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
                         sendStableOnly(to, kind);
                 }
             }
-            callback.accept(null, failure);
+            invokeCallback(null, failure);
         }
     }
 
@@ -537,5 +536,29 @@ public class ExecuteTxn extends ReadCoordinator<ReadReply>
         {
             return "Local Execute";
         }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Execute;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public String describe()
+    {
+        // TODO (desired): summarise what data replies we have
+        return "path=" + path +
+               ", ballot=" + ballot +
+               ", executeAt=" + executeAt +
+               ", flags=" + flags +
+               ", uniqueHlc=" + uniqueHlc +
+               ", isPrivilegedVoteCommitting=" + isPrivilegedVoteCommitting;
     }
 }

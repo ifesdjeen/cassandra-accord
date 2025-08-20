@@ -86,5 +86,4 @@ public interface SortedList<T extends Comparable<? super T>> extends List<T>, Se
             public int size() { return select.size(); }
         };
     }
-
 }

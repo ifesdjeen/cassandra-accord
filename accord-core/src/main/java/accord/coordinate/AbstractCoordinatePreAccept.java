@@ -28,9 +28,10 @@ import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
 import accord.primitives.FullRoute;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.WrappableException;
+import accord.utils.SortedList;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -39,34 +40,28 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
  * from future epochs.
  */
-abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
+abstract class AbstractCoordinatePreAccept<T, R> extends AbstractCoordination<T, R> implements Callback<R>
 {
-    final Node node;
-    final SequentialAsyncExecutor executor;
-    final TxnId txnId;
     final FullRoute<?> route;
-
     final Topologies topologies;
-    final BiConsumer<T, Throwable> callback;
-    private boolean isDone;
+    boolean isDonePreAccept;
 
-    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<T, Throwable> callback)
+    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<? super T, Throwable> callback)
     {
         this(node, executor, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
-    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<T, Throwable> callback)
+    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<? super T, Throwable> callback)
     {
-        this.node = node;
-        this.executor = executor;
-        this.txnId = txnId;
+        super(node, executor, txnId, callback);
         this.route = route;
         this.topologies = topologies;
-        this.callback = callback;
     }
 
+    @Override
     void start()
     {
+        super.start();
         contact(topologies.nodes(), topologies, this);
     }
 
@@ -81,48 +76,38 @@ abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
     @Override
     public final void onFailure(Id from, Throwable failure)
     {
-        if (!isDone)
+        if (!isDonePreAccept)
             onFailureInternal(from, failure);
-    }
-
-    @Override
-    public final boolean onCallbackFailure(Id from, Throwable failure)
-    {
-        if (isDone) return false;
-        isDone = true;
-        callback.accept(null, failure);
-        return true;
     }
 
     @Override
     public final void onSuccess(Id from, R reply)
     {
-        if (!isDone)
+        if (!isDonePreAccept)
             onSuccessInternal(from, reply);
     }
 
     @Override
     public final void onSlowResponse(Id from)
     {
-        if (!isDone)
+        if (!isDonePreAccept)
             onSlowResponseInternal(from);
-    }
-
-    void setFailure(Throwable failure)
-    {
-        Invariants.require(!isDone);
-        // we may already be complete, as we may receive a failure from a later phase; but it's fine to redundantly mark done
-        isDone = true;
-        callback.accept(null, failure);
     }
 
     final void onPreAcceptedOrNewEpoch()
     {
-        Invariants.require(!isDone);
-        isDone = true;
+        Invariants.require(!isDonePreAccept);
+        isDonePreAccept = true;
         long latestEpoch = executeAtEpoch();
-        if (latestEpoch > topologies.currentEpoch()) node.withEpochExact(latestEpoch, executor, callback, t -> WrappableException.wrap(t), () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
+        if (latestEpoch > topologies.currentEpoch()) withEpochExact(latestEpoch, () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
         else onPreAccepted(topologies);
+    }
+
+    @Override
+    void setDone()
+    {
+        isDonePreAccept = true;
+        super.setDone();
     }
 
     final void onPreAcceptedInNewEpoch(Topologies topologies, long latestEpoch)
@@ -131,4 +116,23 @@ abstract class AbstractCoordinatePreAccept<T, R> implements Callback<R>
         if (mismatch == null) onPreAccepted(topologies);
         else onNewEpochTopologyMismatch(mismatch);
     }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.PreAccept;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public SortedList<Id> nodes()
+    {
+        return topologies.nodes();
+    }
+
 }

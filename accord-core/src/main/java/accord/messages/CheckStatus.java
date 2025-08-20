@@ -160,7 +160,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         if (bumpBallot != null && bumpBallot.compareTo(command.promised()) > 0)
             safeCommand.updatePromised(bumpBallot);
 
-        boolean isCoordinating = isCoordinating(node, command);
+        // for the moment we use this flag only to report that the initial coordinator is still active since we cannot infer progress by ballot;
+        // for all future attempts we rely on witnessing a new ballot and using its age to decide when we should attempt to take over
+        boolean isCoordinating = txnId.node.equals(node.id()) && command.promised().equals(Ballot.ZERO) && node.isCoordinatingWithBallot(txnId, Ballot.ZERO);
         Durability durability = command.durability();
         // unsafe to augment durability using DurableBefore, as DurableBefore can in theory get ahead of RedundantBefore
         Route<?> route = command.route();
@@ -228,11 +230,6 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         else if (saveStatus == SaveStatus.Erased && !participants.owns().isEmpty())
             invalidIf = IfUncommitted;
         return invalidIf;
-    }
-
-    private static boolean isCoordinating(Node node, Command command)
-    {
-        return node.isCoordinating(command.txnId(), command.promised());
     }
 
     @Override

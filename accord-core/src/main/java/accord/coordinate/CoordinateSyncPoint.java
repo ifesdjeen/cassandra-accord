@@ -42,7 +42,6 @@ import accord.primitives.FullRoute;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
-import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Unseekables;
@@ -106,14 +105,14 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter)).beginAsResult();
     }
 
-    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static <U extends Unseekable> AsyncResult<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnId(kind, route.domain(), cardinality(route));
@@ -159,7 +158,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         if (executeAt.is(REJECTED))
         {
             node.agent().coordinatorEvents().onRejected(txnId);
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, callback);
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, route.homeKey(), route, executeAt, finishAndTakeCallback());
         }
         else
         {
@@ -170,9 +169,9 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             node.agent().coordinatorEvents().onPreAccepted(txnId);
             if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
-                adapter.propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, callback);
+                adapter.propose(node, executor, topologies, route, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, finishAndTakeCallback());
             else
-                adapter.propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, callback);
+                adapter.propose(node, executor, topologies, route, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, executeAt, deps, finishAndTakeCallback());
         }
     }
 

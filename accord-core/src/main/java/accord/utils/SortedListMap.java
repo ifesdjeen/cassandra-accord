@@ -69,6 +69,15 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         return index >= 0 && values[index] != null;
     }
 
+    public V putAtIndex(int index, V value)
+    {
+        V prev = values[index];
+        values[index] = value;
+        if (prev == null)
+            ++size;
+        return prev;
+    }
+
     @Override
     public V put(K key, V value)
     {
@@ -76,11 +85,7 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         int i = list.find(key);
         if (i < 0)
             throw new IllegalArgumentException(key + " is not in the SortedList of keys");
-        V prev = values[i];
-        values[i] = value;
-        if (prev == null)
-            ++size;
-        return prev;
+        return putAtIndex(i, value);
     }
 
     @Override
@@ -94,29 +99,9 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
     }
 
     @Override
-    public Set<K> keySet()
+    public SortedList<K> keySet()
     {
-        return new SetView<K>()
-        {
-            @Override
-            public boolean contains(Object o)
-            {
-                return get(o) != null;
-            }
-
-            @Override
-            public Iterator<K> iterator()
-            {
-                return new Iter<K>()
-                {
-                    @Override
-                    K get(K key, V value)
-                    {
-                        return key;
-                    }
-                };
-            }
-        };
+        return list;
     }
 
     @Override

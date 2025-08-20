@@ -37,13 +37,13 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.AsyncExecutor;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteSyncPoint;
 import accord.coordinate.ExecuteSyncPoint.SyncPointErased;
 import accord.coordinate.Exhausted;
 import accord.coordinate.Timeout;
 import accord.local.Node;
+import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
@@ -110,7 +110,7 @@ public class DurabilityQueue
 
     private synchronized void submit(SyncPoint<Range> syncPoint, @Nullable DurabilityRequest request, int attempt)
     {
-        AsyncExecutor executor = node.someExecutor();
+        SequentialAsyncExecutor executor = node.someSequentialExecutor();
         if (executor != null && inProgress.size() < maxConcurrency && !isInProgress(syncPoint.route))
         {
             start(syncPoint, request, attempt, executor);
@@ -242,7 +242,7 @@ public class DurabilityQueue
         }
     }
 
-    private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, AsyncExecutor executor)
+    private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, SequentialAsyncExecutor executor)
     {
         logger.debug("{}: Awaiting durability for {}", exclusiveSyncPoint.syncId, exclusiveSyncPoint.route.toRanges());
         ExecuteSyncPoint coordinate = coordinateIncluding(node, exclusiveSyncPoint, request == null ? null : request.including, executor, attempt);
@@ -257,7 +257,7 @@ public class DurabilityQueue
                 maybeSubmitPending();
             }
         });
-        coordinate.invoke((success, fail) -> {
+        coordinate.onDone().invoke((success, fail) -> {
             TxnId txnId = exclusiveSyncPoint.syncId;
             Ranges ranges = exclusiveSyncPoint.route.toRanges();
             String requestor = request != null ? " requested by " + request.requestedBy : "";
@@ -337,7 +337,7 @@ public class DurabilityQueue
 
     private synchronized void submitPending()
     {
-        AsyncExecutor executor = node.someExecutor();
+        SequentialAsyncExecutor executor = node.someSequentialExecutor();
         List<Pending> couldNotSubmit = null;
         Pending next;
         while (null != (next = pending.poll()))
@@ -361,8 +361,18 @@ public class DurabilityQueue
         }
     }
 
-    synchronized void setMaxConcurrency(int newMaxConcurrency)
+    public synchronized void setMaxConcurrency(int newMaxConcurrency)
     {
         this.maxConcurrency = newMaxConcurrency;
+    }
+
+    public synchronized int pendingCount()
+    {
+        return pending.size();
+    }
+
+    public synchronized int activeCount()
+    {
+        return inProgress.size();
     }
 }

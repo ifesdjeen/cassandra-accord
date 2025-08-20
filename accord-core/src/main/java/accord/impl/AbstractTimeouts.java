@@ -47,6 +47,9 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             @Override
             public void cancel()
             {
+                if (!isInHeap())
+                    return;
+
                 lock.lock();
                 try
                 {

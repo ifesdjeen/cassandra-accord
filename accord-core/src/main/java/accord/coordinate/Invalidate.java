@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.InvalidationTracker;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
 import accord.coordinate.tracking.RequestStatus;
@@ -34,7 +35,6 @@ import accord.topology.Topologies;
 import accord.api.RoutingKey;
 import accord.messages.BeginInvalidation;
 import accord.messages.BeginInvalidation.InvalidateReply;
-import accord.messages.Callback;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 import accord.utils.SortedListMap;
@@ -52,30 +52,21 @@ import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
-public class Invalidate implements Callback<InvalidateReply>
+public class Invalidate extends AbstractCoordination<Outcome, InvalidateReply>
 {
-    private final Node node;
-    private final SequentialAsyncExecutor executor;
     private final Ballot ballot;
-    private final TxnId txnId;
     private final Participants<?> invalidateWith;
-    private final BiConsumer<Outcome, Throwable> callback;
 
-    private boolean isDone;
     private boolean isPrepareDone;
     private final boolean transitivelyInvokedByPriorInvalidation;
     private final SortedListMap<Id, InvalidateReply> replies;
     private final InvalidationTracker tracker;
-    private Throwable failure;
     private final LatentStoreSelector reportTo;
 
-    private Invalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    private Invalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        this.callback = callback;
-        this.node = node;
-        this.executor = executor;
+        super(node, executor, txnId, callback);
         this.ballot = ballot;
-        this.txnId = txnId;
         this.invalidateWith = invalidateWith;
         this.transitivelyInvokedByPriorInvalidation = transitivelyInvokedByPriorInvalidation;
         this.reportTo = reportTo;
@@ -85,17 +76,17 @@ public class Invalidate implements Callback<InvalidateReply>
         this.replies = new SortedListMap<>(topologies.nodes(), InvalidateReply[]::new);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, BiConsumer<Outcome, Throwable> callback)
+    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, BiConsumer<? super Outcome, Throwable> callback)
     {
         return invalidate(node, txnId, invalidateWith, false, callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<Outcome, Throwable> callback)
+    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<? super Outcome, Throwable> callback)
     {
         return invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, LatentStoreSelector.standard(), callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<Outcome, Throwable> callback)
+    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
         Invalidate invalidate = new Invalidate(node, node.someSequentialExecutor(), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
@@ -103,17 +94,25 @@ public class Invalidate implements Callback<InvalidateReply>
         return invalidate;
     }
 
-    private void start()
+    @Override
+    void start()
     {
         SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
-        if (contact == null) callback.accept(null, new Exhausted(null, null, null));
-        else node.send(contact, to -> new BeginInvalidation(to, tracker.topologies(), txnId, invalidateWith, ballot), executor, this);
+        if (contact == null)
+        {
+            finishOnExaustion();
+        }
+        else
+        {
+            super.start();
+            node.send(contact, to -> new BeginInvalidation(to, tracker.topologies(), txnId, invalidateWith, ballot), executor, this);
+        }
     }
 
     @Override
     public void onSuccess(Id from, InvalidateReply reply)
     {
-        if (isDone || isPrepareDone)
+        if (isDone() || isPrepareDone)
             return;
 
         replies.put(from, reply);
@@ -127,12 +126,10 @@ public class Invalidate implements Callback<InvalidateReply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        if (isDone || isPrepareDone)
+        if (isDone() || isPrepareDone)
             return;
 
-        if (this.failure == null) this.failure = failure;
-        else this.failure.addSuppressed(failure);
-
+        recordFailure(failure);
         handle(tracker.recordFailure(from));
     }
 
@@ -153,8 +150,8 @@ public class Invalidate implements Callback<InvalidateReply>
             case Failed:
                 // We reach here if we failed to obtain promises from every shard.
                 // If we had any actual failures reported we propagate these
-                isDone = isPrepareDone = true;
-                callback.accept(null, failure != null ? failure : new Preempted(txnId, null));
+                isPrepareDone = true;
+                finishOnFailure();
                 break;
 
             case NoChange:
@@ -220,14 +217,13 @@ public class Invalidate implements Callback<InvalidateReply>
                         if (!invalidateWith.containsAll(fullRoute))
                             witnessedByInvalidation = null;
                     }
-                    RecoverWithRoute.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, callback,
-                                             node.agent().trace(txnId, RECOVER));
+                    PrepareRecovery.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, finishAndTakeCallback(),
+                                            node.agent().trace(txnId, RECOVER));
                     return;
 
                 case Invalidated:
                     // TODO (desired, API consistency): standardise semantics of whether local application of state prior is async or sync to callback
-                    isDone = true;
-                    commitInvalidate();
+                    commitInvalidate(finishAndTakeCallback());
                     return;
             }
         }
@@ -249,8 +245,7 @@ public class Invalidate implements Callback<InvalidateReply>
             //    This is perhaps not even a problem, and requires that no healthy home shard even has the FullRoute.
             //    Other shards would be expected to coordinate the invalidation of this transaction themselves.
             Invariants.require(maxNotTruncated == null || !maxNotTruncated.maxKnowledgeStatus.hasBeen(Status.PreCommitted));
-            isDone = true;
-            callback.accept(TRUNCATED_DURABLE_OR_INVALIDATED, null);
+            finishWithSuccess(TRUNCATED_DURABLE_OR_INVALIDATED);
             return;
         }
 
@@ -259,46 +254,40 @@ public class Invalidate implements Callback<InvalidateReply>
         Ranges ranges = Ranges.of(tracker.promisedShard().range);
         // we look up by TxnId at the target node, so it's fine to pick a RoutingKey even if it's a range transaction
         RoutingKey someKey = invalidateWith.slice(ranges).get(0).someIntersectingRoutingKey(ranges);
+        BiConsumer<? super Outcome, Throwable> callback = finishAndTakeCallback();
         proposeInvalidate(node, executor, ballot, txnId, someKey, (success, fail) -> {
             /*
               We're now inside our *exactly once* callback we registered with proposeInvalidate, and we need to
               make sure we honour our own exactly once semantics with {@code callback}.
               So we are responsible for all exception handling.
              */
-            isDone = true;
-            if (fail != null)
-            {
-                callback.accept(null, fail);
-            }
-            else
-            {
-                try
-                {
-                    commitInvalidate();
-                }
-                catch (Throwable t)
-                {
-                    callback.accept(null, t);
-                }
-            }
+            if (fail != null) callback.accept(null, fail);
+            else commitInvalidate(callback);
         });
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void commitInvalidate()
+    private void commitInvalidate(BiConsumer<? super Outcome, Throwable> callback)
     {
-        @Nullable Route<?> route = InvalidateReply.mergeRoutes(replies.unsafeValuesBackingArray());
-        if (route == null && Route.isRoute(invalidateWith)) route = Route.castToRoute(invalidateWith);
-        if (route != null) route = route.withHomeKey();
+        try
+        {
+            @Nullable Route<?> route = InvalidateReply.mergeRoutes(replies.unsafeValuesBackingArray());
+            if (route == null && Route.isRoute(invalidateWith)) route = Route.castToRoute(invalidateWith);
+            if (route != null) route = route.withHomeKey();
 
-        // TODO (desired, efficiency): commitInvalidate (and others) should skip the network for local applications,
-        //  so we do not need to explicitly do so here before notifying the waiter
-        Participants<?> commitTo = Participants.merge(route, (Participants) invalidateWith);
-        Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
-        commitInvalidateLocal(commitTo, reportTo.refine(txnId, null, commitTo));
+            // TODO (desired, efficiency): commitInvalidate (and others) should skip the network for local applications,
+            //  so we do not need to explicitly do so here before notifying the waiter
+            Participants<?> commitTo = Participants.merge(route, (Participants) invalidateWith);
+            Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
+            commitInvalidateLocal(commitTo, reportTo.refine(txnId, null, commitTo), callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+        }
     }
 
-    private void commitInvalidateLocal(Participants<?> commitTo, StoreSelector reportTo)
+    private void commitInvalidateLocal(Participants<?> commitTo, StoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         // TODO (desired): merge with FetchData.InvalidateOnDone
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
@@ -314,12 +303,33 @@ public class Invalidate implements Callback<InvalidateReply>
     }
 
     @Override
-    public boolean onCallbackFailure(Id from, Throwable failure)
+    public CoordinationKind kind()
     {
-        if (isDone) return false;
+        return CoordinationKind.BeginInvalidate;
+    }
 
-        isDone = true;
-        callback.accept(null, failure);
-        return true;
+    @Override
+    public Unseekables<?> scope()
+    {
+        return invalidateWith;
+    }
+
+    @Override
+    public Ballot ballot()
+    {
+        return ballot;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
+
+    @Nullable
+    @Override
+    public SortedListMap<Id, ?> replies()
+    {
+        return replies;
     }
 }

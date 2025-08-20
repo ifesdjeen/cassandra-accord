@@ -99,7 +99,7 @@ public class Main
                 long now = nowSupplier.getAsLong();
                 callbacks.forEach((messageId, info) -> {
                     if (info.timeout < now && callbacks.remove(messageId, info))
-                        info.callback.onFailure(info.to, new Timeout(null, null));
+                        info.callback.onFailure(info.to, null);
                 });
             }, 1L, TimeUnit.SECONDS);
         }

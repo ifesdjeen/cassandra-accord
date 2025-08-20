@@ -64,9 +64,9 @@ public interface Agent extends UncaughtExceptionListener
         return CoordinatorEventListener.NOOP;
     }
 
-    default LocalEventListener localEvents()
+    default ReplicaEventListener replicaEvents()
     {
-        return LocalEventListener.NOOP;
+        return ReplicaEventListener.NOOP;
     }
 
     @Override
@@ -131,6 +131,12 @@ public interface Agent extends UncaughtExceptionListener
      *  This should aim to prevent two home replicas from attempting to initiate coordination at the same time.
      */
     long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt);
+
+    /**
+     *  This method permits implementations to configure the time at which a local home shard will consider
+     *  ITS OWN coordination slow for purposes of permitting other coordinators to attempt to take over recovery
+     */
+    boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt);
 
     /**
      *  This method permits implementations to configure a delay for waiting to attempt to progress the local

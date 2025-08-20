@@ -22,6 +22,7 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.api.ProgressLog.BlockedUntil;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.AwaitTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
@@ -52,7 +53,7 @@ import static accord.coordinate.tracking.RequestStatus.Success;
  *
  * Asynchronous awaits will not time out if the wait is longer than message/request timeouts.
  */
-public class AsynchronousAwait implements Callback<AwaitOk>
+public class AsynchronousAwait extends AbstractCoordination<AsynchronousAwait.SynchronousResult, AwaitOk> implements Callback<AwaitOk>
 {
     // TODO (desired, efficiency): this should collect the executeAt of any commit, and terminate as soon as one is found
     //                             that is earlier than TxnId for the Txn we are recovering; if all commits we wait for
@@ -70,23 +71,20 @@ public class AsynchronousAwait implements Callback<AwaitOk>
         }
     }
 
-    final TxnId txnId;
     final Participants<?> contact;
     final AwaitTracker tracker;
+    final BlockedUntil blockedUntil;
     final int asynchronousCallbackId;
     final boolean notifyProgressLog;
-    final BiConsumer<SynchronousResult, Throwable> synchronousCallback;
-    private boolean isDone;
-    private Throwable failure;
 
-    public AsynchronousAwait(TxnId txnId, Participants<?> contact, AwaitTracker tracker, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
+    public AsynchronousAwait(Node node, SequentialAsyncExecutor executor, Participants<?> contact, TxnId txnId, AwaitTracker tracker, BlockedUntil blockedUntil, boolean notifyProgressLog, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
     {
-        this.txnId = txnId;
+        super(node, executor, txnId, synchronousCallback);
         this.contact = contact;
         this.tracker = tracker;
+        this.blockedUntil = blockedUntil;
         this.asynchronousCallbackId = asynchronousCallbackId;
         this.notifyProgressLog = notifyProgressLog;
-        this.synchronousCallback = synchronousCallback;
     }
 
     public static AsynchronousAwait awaitAny(Node node, Topologies topologies, TxnId txnId, Route<?> contact, BlockedUntil awaiting, int asynchronousCallbackId, BiConsumer<SynchronousResult, Throwable> synchronousCallback)
@@ -102,31 +100,33 @@ public class AsynchronousAwait implements Callback<AwaitOk>
     {
         Invariants.requireArgument(topologies.size() == 1);
         AwaitTracker tracker = new AwaitTracker(topologies);
-        AsynchronousAwait result = new AsynchronousAwait(txnId, contact, tracker, notifyProgressLog, asynchronousCallbackId, synchronousCallback);
-        result.start(node, executor, topologies, contact, awaiting);
+        AsynchronousAwait result = new AsynchronousAwait(node, executor, contact, txnId, tracker, awaiting, notifyProgressLog, asynchronousCallbackId, synchronousCallback);
+        result.start();
         return result;
     }
 
-    private void start(Node node, SequentialAsyncExecutor executor, Topologies topologies, Route<?> route, BlockedUntil blockedUntil)
+    @Override
+    void start()
     {
-        node.send(topologies.nodes(), to -> new Await(to, topologies, txnId, route, blockedUntil, asynchronousCallbackId, notifyProgressLog), executor, this);
+        super.start();
+        node.send(tracker.nodes(), to -> new Await(to, tracker.topologies(), txnId, contact, blockedUntil, asynchronousCallbackId, notifyProgressLog), executor, this);
     }
 
     @Override
-    public synchronized void onSuccess(Id from, AwaitOk reply)
+    public void onSuccess(Id from, AwaitOk reply)
     {
-        if (isDone) return;
+        if (isDone()) return;
 
         if (tracker.recordSuccess(from, reply == AwaitOk.Ready) == Success)
             onSuccess();
     }
 
     @Override
-    public synchronized void onFailure(Id from, Throwable failure)
+    public void onFailure(Id from, Throwable failure)
     {
-        if (isDone) return;
+        if (isDone()) return;
 
-        this.failure = FailureAccumulator.append(this.failure, failure);
+        recordFailure(failure);
         RequestStatus status = tracker.recordFailure(from);
         switch (status)
         {
@@ -136,8 +136,7 @@ public class AsynchronousAwait implements Callback<AwaitOk>
                 onSuccess();
                 break;
             case Failed:
-                isDone = true;
-                synchronousCallback.accept(null, this.failure);
+                finishOnFailure();
         }
     }
 
@@ -147,18 +146,26 @@ public class AsynchronousAwait implements Callback<AwaitOk>
         Unseekables<?> notReady = tracker.notReady(contact);
         if (notReady.isEmpty())
             notReady = null;
-        isDone = true;
-        synchronousCallback.accept(new SynchronousResult(ready, notReady), null);
+
+        finishWithSuccess(new SynchronousResult(ready, notReady));
     }
 
     @Override
-    public synchronized boolean onCallbackFailure(Id from, Throwable failure)
+    public CoordinationKind kind()
     {
-        if (isDone) return false;
+        return CoordinationKind.AsyncAwait;
+    }
 
-        isDone = true;
-        synchronousCallback.accept(null, failure);
-        return true;
+    @Override
+    public Unseekables<?> scope()
+    {
+        return contact;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
     }
 }
 

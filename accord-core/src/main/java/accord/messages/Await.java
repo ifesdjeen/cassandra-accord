@@ -376,5 +376,31 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             Commands.updateRoute(safeStore, safeCommand, route);
             safeStore.progressLog().remoteCallback(safeStore, safeCommand, newStatus, callbackId, from);
         }
+
+        @Override
+        public String toString()
+        {
+            return "AsyncAwaitComplete{" +
+                   "txnId=" + txnId +
+                   ", route=" + route +
+                   ", newStatus=" + newStatus +
+                   ", callbackId=" + callbackId +
+                   ", from=" + from +
+                   '}';
+        }
+    }
+
+    @Override
+    public String toString()
+    {
+        return "Await{" +
+               "txnId=" + txnId +
+               ", scope=" + scope +
+               ", blockedUntil=" + blockedUntil +
+               ", minAwaitEpoch=" + minAwaitEpoch +
+               ", maxAwaitEpoch=" + maxAwaitEpoch +
+               ", callbackId=" + callbackId +
+               ", notifyProgressLog=" + notifyProgressLog +
+               '}';
     }
 }

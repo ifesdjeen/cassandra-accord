@@ -29,6 +29,7 @@ import accord.messages.RecoverAwait;
 import accord.messages.RecoverAwait.RecoverAwaitOk;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
@@ -44,25 +45,22 @@ import static accord.coordinate.Recover.InferredFastPath.Unknown;
  * This may or may not be a condition we expect to reach promptly, but we will wait only until the timeout passes
  * at which point we will report failure.
  */
-public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
+public class SynchronousRecoverAwait extends ReadCoordinator<InferredFastPath, RecoverAwaitOk>
 {
     final Participants<?> participants;
     final BlockedUntil blockedUntil;
     final boolean notifyProgressLog;
     final TxnId recoverId;
 
-    final BiConsumer<InferredFastPath, Throwable> callback;
-
     private InferredFastPath outcome = Unknown;
     private Participants<?> waitingOn;
     public SynchronousRecoverAwait(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, BlockedUntil blockedUntil, boolean notifyProgressLog, TxnId recoverId, BiConsumer<InferredFastPath, Throwable> callback)
     {
-        super(node, executor, topologies, txnId);
+        super(node, executor, topologies, txnId, callback);
         this.participants = participants;
         this.blockedUntil = blockedUntil;
         this.notifyProgressLog = notifyProgressLog;
         this.recoverId = recoverId;
-        this.callback = callback;
         this.waitingOn = participants;
     }
 
@@ -110,14 +108,32 @@ public class SynchronousRecoverAwait extends ReadCoordinator<RecoverAwaitOk>
     protected void onDone(ReadCoordinator.Success success, Throwable failure)
     {
         Invariants.require(outcome != null);
-        if (failure == null) callback.accept(outcome, null);
-        else callback.accept(null, failure);
+        if (failure == null) invokeCallback(outcome, null);
+        else invokeCallback(null, failure);
     }
 
     @Override
     protected void contact(Id to)
     {
         node.send(to, new RecoverAwait(to, topologies, txnId, participants, blockedUntil, notifyProgressLog, recoverId), executor, this);
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.RecoverAwait;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return participants;
+    }
+
+    @Override
+    public String describe()
+    {
+        return "waitingOn=" + waitingOn + ",blockedUntil=" + blockedUntil + ", notifyProgressLog=" + notifyProgressLog;
     }
 }
 

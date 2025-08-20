@@ -47,10 +47,10 @@ import accord.primitives.FullRoute;
 import accord.primitives.Ranges;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
-import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
 import static accord.coordinate.ReadCoordinator.Action.Aborted;
@@ -63,7 +63,7 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
+public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(ExecuteEphemeralRead.class);
@@ -73,14 +73,13 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
     final Deps deps;
     final Topologies allTopologies;
     final CoordinationFlags flags;
-    final BiConsumer<? super Result, Throwable> callback;
     private Data data;
 
     ExecuteEphemeralRead(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, CoordinationFlags flags, BiConsumer<? super Result, Throwable> callback)
     {
         // we need to send Stable to the origin epoch as well as the execution epoch
         // TODO (desired): permit slicing Topologies by key (though unnecessary if we eliminate the concept of non-participating home keys)
-        super(node, executor, topologies, txnId);
+        super(node, executor, topologies, txnId, callback);
         Invariants.requireArgument(txnId.kind() == EphemeralRead);
         Invariants.require(topologies.currentEpoch() == txnId.epoch());
         this.txn = txn;
@@ -88,7 +87,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
         this.allTopologies = topologies;
         this.deps = deps;
         this.flags = flags;
-        this.callback = callback;
     }
 
     @Override
@@ -132,8 +130,8 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             if (ok.futureEpoch > allTopologies.currentEpoch())
             {
                 // TODO (expected): only submit new requests for the keys that execute in a later epoch
-                node.withEpochExact(ok.futureEpoch, executor, callback, t -> WrappableException.wrap(t), () -> {
-                    new ExecuteEphemeralRead(node, executor, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch, SHARE), route, txnId.withEpoch(ok.futureEpoch), txn, deps, CoordinationFlags.none(), callback).start();
+                withEpochExact(ok.futureEpoch, () -> {
+                    new ExecuteEphemeralRead(node, executor, node.topology().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch, SHARE), route, txnId.withEpoch(ok.futureEpoch), txn, deps, CoordinationFlags.none(), takeCallback()).start();
                 });
                 return Aborted;
             }
@@ -155,12 +153,12 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
             case Redundant:
             case Rejected:
                 // TODO (expected): shouldn't be preemptible (can be made redundant, but should be a special case)
-                callback.accept(null, new Preempted(txnId, route.homeKey()));
+                invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
             case Insufficient:
                 // the replica may be missing the original commit, or the additional commit, so send everything
                 // also try sending a read command to another replica, in case they're ready to serve a response
-                callback.accept(null, illegalState("Received Insufficient response to ephemeral read request"));
+                invokeCallback(null, illegalState("Received Insufficient response to ephemeral read request"));
                 return Action.Aborted;
         }
     }
@@ -169,13 +167,9 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
     protected void onDone(Success success, Throwable failure)
     {
         if (failure == null)
-        {
-            callback.accept(txn.result(txnId, txnId.withEpochAtLeast(allTopologies.currentEpoch()), data), null);
-        }
+            invokeCallback(txn.result(txnId, txnId.withEpochAtLeast(allTopologies.currentEpoch()), data), null);
         else
-        {
-            callback.accept(null, failure);
-        }
+            invokeCallback(null, failure);
     }
 
     class LocalExecute extends ReadEphemeralTxnData
@@ -251,5 +245,24 @@ public class ExecuteEphemeralRead extends ReadCoordinator<ReadReply>
 
         @Override
         public MessageType type() { throw new UnsupportedOperationException(); }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Execute;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public String describe()
+    {
+        // TODO (desired): summarise what data replies we have
+        return "flags=" + flags;
     }
 }

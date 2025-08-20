@@ -16,18 +16,28 @@
  * limitations under the License.
  */
 
-package accord.coordinate.tracking;
+package accord.utils;
 
-import accord.topology.Shard;
+import java.util.List;
 
-public abstract class ShardTracker
+import com.google.common.collect.Lists;
+
+import accord.coordinate.Timeout;
+import accord.local.Node;
+
+public class DebugMap extends SortedListMap<Node.Id, Object>
 {
-    public final Shard shard;
+    private static final Timeout timeoutInstance = Timeout.unsafeTimeout(null, null);
 
-    public ShardTracker(Shard shard)
+    public DebugMap(SortedList<Node.Id> list)
     {
-        this.shard = shard;
+        super(list, Object[]::new);
     }
 
-    public abstract String summarise();
+    public void debug(Node.Id from, Object reply)
+    {
+        if (reply == null)
+            reply = timeoutInstance;
+        merge(from, reply, (a, b) -> a instanceof List<?> ? ((List<Object>) a).add(b) : Lists.newArrayList(a, b));
+    }
 }

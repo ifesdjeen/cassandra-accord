@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptTracker;
 import accord.local.Node;
@@ -39,7 +40,6 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
-import accord.utils.WrappableException;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
@@ -92,13 +92,14 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     @Override
     public void onFailureInternal(Id from, Throwable failure)
     {
+        recordFailure(failure);
         switch (tracker.recordFailure(from))
         {
             default: throw new AssertionError();
             case NoChange:
                 break;
             case Failed:
-                setFailure(new Timeout(txnId, route.homeKey()));
+                finishOnFailure();
                 break;
             case Success:
                 onPreAcceptedOrNewEpoch();
@@ -111,7 +112,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         if (!reply.isOk())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
-            setFailure(new Preempted(txnId, route.homeKey()));
+            finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, route.homeKey()));
         }
         else
         {
@@ -138,6 +139,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
          * We cannot execute the transaction because the execution epoch's topology no longer contains all of the
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
+        BiConsumer<? super T, Throwable> callback = finishAndTakeCallback();
         proposeInvalidate(node, executor, node.uniqueTimestamp(Ballot::fromValues), txnId, route.homeKey(), (outcome, failure) -> {
             if (failure != null)
                 mismatch.addSuppressed(failure);
@@ -149,11 +151,22 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        node.withEpochExact(executeAt.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
+        withEpochExact(executeAt.epoch(), () -> {
             onPreAccepted(topologies, executeAt, oks);
             if (!Invariants.debug()) oks.clear();
         });
     }
 
+    @Override
+    public SortedListMap<Id, ?> replies()
+    {
+        return oks;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
+    }
     abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Id, PreAcceptOk> oks);
 }

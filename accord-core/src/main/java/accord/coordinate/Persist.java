@@ -20,7 +20,9 @@ package accord.coordinate;
 
 import accord.api.Result;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
+import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
@@ -35,19 +37,18 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.messages.Apply.Kind.Maximal;
 import static accord.primitives.Status.Durability.AllQuorums;
 
-public abstract class Persist implements Callback<ApplyReply>
+public abstract class Persist extends AbstractSimpleCoordination implements Callback<ApplyReply>
 {
-    protected final Node node;
-    protected final SequentialAsyncExecutor executor;
-    protected final TxnId txnId;
     protected final Ballot ballot;
     protected final Route<?> sendTo;
     protected final Txn txn;
@@ -57,18 +58,15 @@ public abstract class Persist implements Callback<ApplyReply>
     protected final Result result;
     protected final FullRoute<?> route;
     protected final CoordinationFlags flags;
-    protected final Topologies topologies;
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
     protected final QuorumTracker tracker;
     protected final Apply.Factory factory;
+    protected final Apply.Kind applyKind;
     protected final boolean informDurableOnDone;
-    boolean isDone;
 
-    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory)
+    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind)
     {
-        this.node = node;
-        this.executor = executor;
-        this.txnId = txnId;
+        super(node, executor, txnId);
         this.ballot = ballot;
         this.sendTo = sendTo;
         this.txn = txn;
@@ -78,28 +76,31 @@ public abstract class Persist implements Callback<ApplyReply>
         this.result = result;
         this.route = route;
         this.flags = flags;
-        this.topologies = all;
         this.tracker = new QuorumTracker(all);
         this.factory = factory;
         this.informDurableOnDone = informDurableOnDone;
+        this.applyKind = applyKind;
         Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
     @Override
     public void onSuccess(Id from, ApplyReply reply)
     {
+        if (isDone())
+            return;
+
         switch (reply)
         {
             default: throw new IllegalStateException();
             case Redundant:
             case Applied:
-                if (tracker.recordSuccess(from) == Success && informDurableOnDone && !isDone)
+                if (tracker.recordSuccess(from) == Success && informDurableOnDone)
                 {
                     // note: we enter this branch whether or not sendTo == route,
                     // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
                     // but we make this explicit for the caller with informDurableOnDone
-                    isDone = true;
-                    InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, AllQuorums);
+                    setDone();
+                    InformDurable.informDefault(node, tracker.topologies(), txnId, route, ballot, executeAt, AllQuorums);
                 }
             case RaceWithRecovery:
                 // don't count this towards durability; otherwise it is possible (though very unlikely)
@@ -108,15 +109,21 @@ public abstract class Persist implements Callback<ApplyReply>
                 // reached another response in its quorum; in this case it may incorrectly determine the transaction should be invalidated
                 break;
             case Insufficient:
-                node.send(from, factory.create(Apply.Kind.Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(from)));
+                Invariants.expect(applyKind != Maximal, "Received Insufficient reply from %s, but already sent Maximal", from);
+                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(from)));
         }
     }
 
     @Override
     public void onFailure(Id from, Throwable failure)
     {
+        if (isDone())
+            return;
+
         // TODO (desired, consider): send knowledge of partial persistence?
         // TODO (expected): we should presumably report total request failure somewhere?
+        if (tracker.recordFailure(from) == RequestStatus.Failed)
+            setDone();
     }
 
     @Override
@@ -126,7 +133,8 @@ public abstract class Persist implements Callback<ApplyReply>
         return false;
     }
 
-    public void start(Apply.Kind kind, Topologies all, Writes writes, Result result)
+    @Override
+    protected void start()
     {
         node.agent().coordinatorEvents().onExecuted(txnId, ballot);
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
@@ -135,10 +143,30 @@ public abstract class Persist implements Callback<ApplyReply>
         if (contact == null)
         {
             // TODO (expected): we should presumably report this somewhere?
+            setDone();
         }
         else
         {
-            node.send(contact, to -> factory.create(kind, to, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(to)), executor, this);
+            super.start();
+            node.send(contact, to -> factory.create(applyKind, to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags.get(to)), executor, this);
         }
+    }
+
+    @Override
+    public CoordinationKind kind()
+    {
+        return CoordinationKind.Persist;
+    }
+
+    @Override
+    public Unseekables<?> scope()
+    {
+        return route;
+    }
+
+    @Override
+    public AbstractTracker<?> tracker()
+    {
+        return tracker;
     }
 }

@@ -25,6 +25,7 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.VisibleForImplementation;
 import accord.local.Node;
 import accord.local.TimeService;
 import accord.messages.Callback;
@@ -39,6 +40,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
     public interface CallbackEntry
     {
+        @VisibleForImplementation
         long registeredAt(TimeUnit units);
     }
 
@@ -110,7 +112,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             @Override
             public void onExpire(long nowMicros)
             {
-                safeInvoke(RegisteredCallback::unsafeOnFailure, new accord.coordinate.Timeout(null, null));
+                safeInvoke(RegisteredCallback::unsafeOnFailure, (Throwable)null);
             }
 
             private void unsafeOnSuccess(T reply)
