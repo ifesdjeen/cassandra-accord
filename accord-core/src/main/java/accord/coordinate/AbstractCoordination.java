@@ -301,7 +301,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
     public SortedList<Node.Id> inflight()
     {
         SortedListSet<Node.Id> build = SortedListSet.noneOf(nodes);
-        for (int i = expectingReply.nextSetBit(0) ; i < nodes.size() ; i = expectingReply.nextSetBit(i + 1))
+        for (int i = expectingReply.nextSetBit(0) ; i < nodes.size() && i >= 0 ; i = expectingReply.nextSetBit(i + 1))
             build.addIndex(i);
         return SortedArrayList.copySorted(build, Node.Id[]::new);
     }
