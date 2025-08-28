@@ -583,7 +583,21 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             .begin((success, fail) -> {
                 if (fail != null)
                 {
-                    Ranges remaining = redundantBefore.removeRetired(redundantBefore.removeWitnessed(minForEpoch, ranges));
+                    Ranges notRetired = redundantBefore.removeRetired(ranges);
+                    Ranges retired = ranges.without(notRetired);
+                    Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, notRetired);
+
+                    if (!retired.isEmpty())
+                    {
+                        logger.info("Failed to close epoch {} for ranges {} on store {}, but some are retired; marking these as synced.", epoch, ranges, id, fail);
+                        execute((PreLoadContext.Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
+                            markSyncedInternal(safeStore, epoch, retired, "(Retired)");
+                        });
+                    }
+                    else if (remaining.isEmpty())
+                    {
+                        logger.info("Failed to close epoch {} for ranges {} on store {}, but none remaining. Aborting.", epoch, ranges, id, fail);
+                    }
                     if (!remaining.isEmpty())
                     {
                         logger.error("Failed to close epoch {} for ranges {} on store {}. Retrying.", epoch, remaining, id, fail);
@@ -735,7 +749,11 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         Invariants.require(syncId.is(VisibilitySyncPoint));
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
+        markSyncedInternal(safeStore, syncId.epoch(), ranges, syncId);
+    }
 
+    private void markSyncedInternal(SafeCommandStore safeStore, long epoch, Ranges ranges, Object describe)
+    {
         synchronized (waitingOnSync)
         {
             if (waitingOnSync.isEmpty())
@@ -744,7 +762,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
             LongHashSet remove = null;
             for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
             {
-                if (e.getKey() > syncId.epoch())
+                if (e.getKey() > epoch)
                     break;
 
                 Ranges waitingOn = e.getValue().waitingOn;
@@ -757,7 +775,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                     e.getValue().waitingOnDurable = waitingOnDurable = waitingOnDurable.without(ranges);
                     if (waitingOnDurable.isEmpty())
                     {
-                        logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), syncId);
+                        logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), describe);
                         e.getValue().whenDone.trySuccess(null);
                         if (remove == null)
                             remove = new LongHashSet();
@@ -765,7 +783,7 @@ public abstract class CommandStore implements SequentialAsyncExecutor
                     }
                     else
                     {
-                        logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync and {} to sync durably", synced, e.getKey(), syncId, waitingOn, waitingOnDurable);
+                        logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync and {} to sync durably", synced, e.getKey(), describe, waitingOn, waitingOnDurable);
                     }
                 }
             }

@@ -294,7 +294,7 @@ public abstract class AbstractCoordination<Result, Reply extends accord.messages
             if (replies[i] != null && !(replies[i] instanceof accord.messages.Reply))
                 replies[i] = null;
         }
-        return new SortedListMap<Node.Id, Ok>(nodes, replies, replyCount);
+        return new SortedListMap<>(nodes, replies, replyCount);
     }
 
     @Override
