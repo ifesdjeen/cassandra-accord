@@ -83,6 +83,11 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             return "EpochState{" + epoch + '}';
         }
 
+        public String toDebugString()
+        {
+            return toString();
+        }
+
         @VisibleForTesting
         public synchronized void setReadyForTesting(Topology topology)
         {
@@ -440,13 +445,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             {
                 if (i > epochs.minEpoch())
                     sb.append(", ");
-                sb.append(i).append(": ")
-                  .append(" received ")
-                  .append(epochs.getOrCreate(i).received)
-                  .append(" acknowledged ")
-                  .append(epochs.getOrCreate(i).acknowledged)
-                  .append(" reads ")
-                  .append(epochs.getOrCreate(i).reads);
+                sb.append(i).append(": ").append(epochs.getOrCreate(i).toDebugString());
             }
         }
         return sb.toString();
