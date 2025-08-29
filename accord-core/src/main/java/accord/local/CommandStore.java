@@ -568,9 +568,10 @@ public abstract class CommandStore implements SequentialAsyncExecutor
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
         Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
         AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
+        WaitingOnSync sync = new WaitingOnSync(whenDone, remaining);
         synchronized (waitingOnSync)
         {
-            waitingOnSync.put(epoch, new WaitingOnSync(whenDone, remaining));
+            Invariants.require(waitingOnSync.put(epoch, sync) == null);
         }
         ensureReadyToCoordinate(epoch, ranges);
         return whenDone;
